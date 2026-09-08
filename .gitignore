@@ -1,0 +1,41 @@
+# Dependencies and generated output
+node_modules/
+coverage/
+dist/
+
+# Local authentication and runtime state (never commit the access key)
+.remote-codex/
+access-key
+access-key.*
+.env
+.env.*
+!.env.example
+!.env.sample
+*.local
+*.local.*
+*.log
+.npmrc
+.netrc
+auth.json
+credentials*.json
+
+# Local agent/editor configuration can contain personal paths or credentials
+.codex/
+.agents/
+.vscode/
+.idea/
+.ssh/
+
+# Browser reports, traces and screenshots may contain session content
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Private key material and machine-specific files
+*.pem
+*.key
+*.p12
+*.pfx
+.DS_Store
+Thumbs.db

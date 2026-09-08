@@ -1,0 +1,23 @@
+{
+  "name": "remote-codex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A browser client for your existing local Codex app-server sessions",
+  "engines": {
+    "node": ">=18.19"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/*.test.js",
+    "test:browser": "playwright test",
+    "check": "node --check server/index.js && node --check server/codex.js && node --check server/http.js && node --check server/changes.js && node --check public/app.js && node --check public/state.js && node --check public/locales.js && node --check public/preferences.js && node --check public/i18n.js && node --check public/changes.js && node --check public/queue.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.55.1"
+  }
+}
