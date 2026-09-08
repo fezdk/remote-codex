@@ -1,3 +1,5 @@
+import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -108,4 +110,16 @@ test('native queue uses client IDs, safely withdraws once and lists completed Co
   const changes=await (await request('/api/threads/session-one/changes')).json();
   assert.equal(changes.files[0].path,'app.js');assert.equal(changes.files[0].added,1);
   assert.equal((await (await request('/api/threads/session-one/message',{text:''})).json()).errorKey,'error.message');
+});
+
+test('project suggestions require login and missing directories require explicit creation',async t=>{
+  const {request,base,codex}=await setup(t);
+  const root=await mkdtemp(resolve(tmpdir(),'remote-codex-project-api-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const cwd=resolve(root,'new project');
+  assert.equal((await fetch(base+'/api/projects?path=/')).status,401);
+  const result=await (await request('/api/projects?'+new URLSearchParams({path:cwd}))).json();assert.equal(result.state,'missing');
+  assert.equal((await request('/api/threads',{cwd})).status,400);await assert.rejects(stat(cwd),{code:'ENOENT'});
+  assert.equal(codex.calls.some(call=>call.method==='thread/start'),false);
+  assert.equal((await request('/api/threads',{cwd,createDirectory:true})).status,201);
+  assert.equal((await stat(cwd)).isDirectory(),true);assert.deepEqual(codex.calls.at(-1),{method:'thread/start',params:{cwd}});
 });

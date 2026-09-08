@@ -1,5 +1,5 @@
 import { t, errorText } from './i18n.js';
-import { activeTurn, applyEvent } from './state.js';
+import { activeTurn, isWorking, applyEvent } from './state.js';
 const $ = id => document.getElementById(id);
 const textOf = item => (item.input || []).filter(part => part.type === 'text').map(part => part.text).join('\n');
 const textOnly = item => item.input?.length && item.input.every(part => part.type === 'text');
@@ -9,15 +9,24 @@ const clientId = () => [...crypto.getRandomValues(new Uint8Array(16))].map(n => 
 export function initQueue({ api, getState, notice, renderApp, saveDraft }) {
   let threadId, items = [], revision = 0, failure, more = false, timer;
   const pending = new Map(), failed = new Map(), editing = new Map(), busy = new Set();
-  function draft(text, mode) {
+  const workContext = () => ({ turnId: activeTurn(getState())?.id, working: isWorking(getState()) });
+  function reconcileEditing() {
+    const edit = editing.get(threadId), current = workContext();
+    if (edit && current.working && (!edit.working || current.turnId && current.turnId !== edit.turnId)) editing.delete(threadId);
+  }
+  function draft(text, mode, context = workContext()) {
     const prior = editing.get(threadId)?.prior ?? $('message').value;
-    editing.set(threadId, { mode, prior });
+    // A recalled/consumed message is an ordinary new draft, never an editable sent message.
+    if (mode === 'edit') editing.set(threadId, { mode, prior, ...context });
+    else editing.delete(threadId);
     $('message').value = text; saveDraft(threadId, text); $('message').focus(); renderApp();
   }
   function render() {
-    const state = getState(), active = activeTurn(state), flight = pending.get(threadId);
+    reconcileEditing();
+    const state = getState(), active = activeTurn(state), working = isWorking(state), submission = pending.get(threadId);
+    const flight = submission?.received ? null : submission;
     const fragment = document.createDocumentFragment();
-    const disabled = !state.connected || !state.ready || Boolean(flight) || busy.has(threadId) || state.thread?.canAcceptDirectInput === false;
+    const disabled = !state.connected || !state.ready || Boolean(submission) || busy.has(threadId) || state.thread?.canAcceptDirectInput === false;
     function card(item, status, actions) {
       const row = node('div', 'queued-message'); row.dataset.queueId = item.id;
       row.append(node('div', 'queue-status', status), node('p', 'queue-text', textOf(item)));
@@ -27,7 +36,7 @@ export function initQueue({ api, getState, notice, renderApp, saveDraft }) {
     }
     for (const item of items) card(item, t('queue.waiting'), [
       ['queue.edit', () => edit(item), !textOnly(item)],
-      [active ? 'queue.steer' : 'queue.start', () => deliver(item), Boolean(active) && !textOnly(item)],
+      [working ? 'queue.steer' : 'queue.start', () => deliver(item), working && (!active || !textOnly(item))],
       ['queue.cancel', () => cancel(item)],
     ]);
     if (flight) card(flight, t('queue.sending'), []);
@@ -38,13 +47,13 @@ export function initQueue({ api, getState, notice, renderApp, saveDraft }) {
     const mode = editing.get(threadId)?.mode;
     $('edit-mode').hidden = !mode;
     $('edit-mode-label').textContent = mode ? t(mode === 'edit' ? 'queue.editing' : 'queue.resubmit') : '';
-    $('send').disabled = disabled || state.loading || !$('message').value.trim() || Boolean(active && failure);
-    $('send').setAttribute('aria-label', t(active ? 'queue.add' : 'session.send'));
+    $('send').disabled = disabled || state.loading || !$('message').value.trim() || Boolean(working && failure);
+    $('send').setAttribute('aria-label', t(working ? 'queue.add' : 'session.send'));
     $('send').title = $('send').getAttribute('aria-label');
-    $('steer').hidden = !active;
-    $('steer').disabled = disabled || !$('message').value.trim();
-    $('message').placeholder = t(active ? 'queue.placeholder' : 'session.placeholder');
-    $('send-mode').textContent = t(active ? 'queue.mode' : 'session.defaults');
+    $('steer').hidden = !working;
+    $('steer').disabled = disabled || !active || !$('message').value.trim();
+    $('message').placeholder = t(working ? 'queue.placeholder' : 'session.placeholder');
+    $('send-mode').textContent = t(working ? 'queue.mode' : 'session.defaults');
   }
   async function refresh() {
     if (!threadId || !getState().connected) return;
@@ -55,10 +64,10 @@ export function initQueue({ api, getState, notice, renderApp, saveDraft }) {
   }
   const endpoint = (id, item, action) => `/api/threads/${encodeURIComponent(id)}/queue/${encodeURIComponent(item.id)}/${action}`;
   async function edit(item) {
-    const id = threadId; busy.add(id); render();
+    const id = threadId, context = workContext(); busy.add(id); render();
     try {
       const result = await api(endpoint(id, item, 'delete'), {});
-      if (threadId === id) { draft(textOf(item), result.deleted ? 'edit' : 'resubmit'); if (!result.deleted) notice(t('queue.noLongerQueued')); }
+      if (threadId === id) { draft(textOf(item), result.deleted ? 'edit' : 'resubmit', context); if (!result.deleted) notice(t('queue.noLongerQueued')); }
       else if (result.deleted) failed.set(id, [...failed.get(id) || [], item]);
     } catch (error) {
       // Deletion may have succeeded even when its HTTP acknowledgement was lost.
@@ -94,7 +103,7 @@ export function initQueue({ api, getState, notice, renderApp, saveDraft }) {
     if ((steer ? $('steer') : $('send')).disabled || !text.trim()) return;
     const item = { id: clientId(), input: [{ type: 'text', text }] }; pending.set(id, item); renderApp();
     try {
-      const queue = turn && !steer;
+      const queue = isWorking(state) && !steer;
       const response = await api(`/api/threads/${encodeURIComponent(id)}/${queue ? 'queue' : 'message'}`, { text, ...(queue ? { clientId: item.id } : steer && turn ? { turnId: turn.id } : {}) });
       saveDraft(id, threadId === id && $('message').value !== text ? $('message').value : '');
       editing.delete(id);
@@ -104,11 +113,21 @@ export function initQueue({ api, getState, notice, renderApp, saveDraft }) {
         $('message').focus();
       }
     } catch (error) { notice(error); }
-    finally { pending.delete(id); if (threadId === id) await refresh(); renderApp(true); }
+    finally { pending.delete(id); renderApp(true); if (threadId === id) await refresh(); }
   }
   $('steer').onclick = () => submit(true);
   $('done-editing').onclick = () => { const prior = editing.get(threadId)?.prior || ''; editing.delete(threadId); $('message').value = prior; saveDraft(threadId, prior); renderApp(); $('message').focus(); };
-  return { render, refresh, submit, reset() { pending.clear(); failed.clear(); editing.clear(); items = []; threadId = null; ++revision; render(); }, selectThread(id) { if (id !== threadId) { threadId = id; items = []; failure = null; more = false; ++revision; } render(); }, event(message) { if (message.params?.threadId === threadId && ['thread/queue/changed', 'turn/completed'].includes(message.method)) { clearTimeout(timer); timer = setTimeout(refresh, 80); } }, keydown(event) {
+  return { render, refresh, submit, reset() { pending.clear(); failed.clear(); editing.clear(); items = []; threadId = null; ++revision; render(); }, selectThread(id) { if (id !== threadId) { threadId = id; items = []; failure = null; more = false; ++revision; } render(); }, event(message) {
+    const id = message.params?.threadId;
+    const edit = editing.get(id);
+    if (edit && (message.method === 'turn/started' && message.params.turn.id !== edit.turnId || message.method === 'thread/status/changed' && message.params.status.type === 'active' && !edit.working)) editing.delete(id);
+    const submission = pending.get(id), item = message.params?.item;
+    if (submission && ['item/started', 'item/completed'].includes(message.method) && item?.type === 'userMessage' && textOf({ input: item.content }) === textOf(submission)) {
+      submission.received = true;
+      editing.delete(id);
+    }
+    if (id === threadId && ['thread/queue/changed', 'turn/completed'].includes(message.method)) { clearTimeout(timer); timer = setTimeout(refresh, 80); }
+  }, keydown(event) {
     if (event.key !== 'ArrowUp' || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || $('message').value || busy.has(threadId) || pending.has(threadId)) return;
     event.preventDefault();
     const queued = items.findLast(textOnly);

@@ -4,10 +4,62 @@ const $ = id => document.getElementById(id);
 const node = (tag, className, text) => { const el = document.createElement(tag); el.className = className; if (text != null) el.textContent = text; return el; };
 
 export function initChanges({ api, getState }) {
-  let threadId, source = 'codex', visible = matchMedia('(min-width: 1201px)').matches;
+  const desktop = matchMedia('(min-width: 1201px)');
+  const splitter = $('changes-resizer'), container = splitter.parentElement;
+  let preferredWidth = 350, drag = null;
+  try { const saved = Number(localStorage.getItem('remote-codex.changes-width')); if (Number.isFinite(saved) && saved >= 280 && saved <= 10000) preferredWidth = saved; } catch { /* Resizing also works without storage. */ }
+  let threadId, source = 'codex', visible = desktop.matches;
   let files = [], selection = null, detail = null, busy = false, failure = null, truncated = false, revision = 0, detailRevision = 0, timer;
+  function widthLimits() {
+    return { min: 280, max: Math.max(280, container.clientWidth - 360 - 8) };
+  }
+  function resize() {
+    splitter.hidden = !visible || !desktop.matches;
+    if (splitter.hidden) { finishDrag(false); return; }
+    if (!container.clientWidth) return;
+    const { min, max } = widthLimits();
+    const width = Math.round(Math.min(max, Math.max(min, preferredWidth)));
+    container.style.setProperty('--changes-width', `${width}px`);
+    splitter.setAttribute('aria-valuemin', String(min)); splitter.setAttribute('aria-valuemax', String(max)); splitter.setAttribute('aria-valuenow', String(width));
+    splitter.setAttribute('aria-valuetext', t('changes.width', { width }));
+  }
+  function saveWidth() { try { localStorage.setItem('remote-codex.changes-width', String(preferredWidth)); } catch { /* Keep the width for this page. */ } }
+  function finishDrag(save = true) {
+    if (!drag) return;
+    const previous = drag; drag = null;
+    if (!save) preferredWidth = previous.preference;
+    document.body.classList.remove('resizing-changes');
+    if (splitter.hasPointerCapture(previous.id)) splitter.releasePointerCapture(previous.id);
+    if (save) saveWidth();
+    resize();
+  }
+  splitter.onpointerdown = event => {
+    if (event.button !== 0 || drag || !desktop.matches) return;
+    event.preventDefault(); splitter.focus();
+    drag = { id: event.pointerId, x: event.clientX, width: $('changes-panel').getBoundingClientRect().width, preference: preferredWidth };
+    splitter.setPointerCapture(event.pointerId); document.body.classList.add('resizing-changes');
+  };
+  splitter.onpointermove = event => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const { min, max } = widthLimits(); preferredWidth = Math.min(max, Math.max(min, drag.width + drag.x - event.clientX)); resize();
+  };
+  splitter.onpointerup = event => { if (event.pointerId === drag?.id) finishDrag(); };
+  splitter.onpointercancel = () => finishDrag(false);
+  splitter.onlostpointercapture = () => finishDrag(false);
+  splitter.ondblclick = () => { preferredWidth = 350; resize(); saveWidth(); };
+  splitter.onkeydown = event => {
+    if (event.key === 'Escape' && drag) { event.preventDefault(); finishDrag(false); return; }
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || drag) return;
+    event.preventDefault(); const { min, max } = widthLimits(), current = Number(splitter.getAttribute('aria-valuenow'));
+    const step = event.shiftKey ? 80 : 20;
+    preferredWidth = event.key === 'Home' ? min : event.key === 'End' ? max : Math.min(max, Math.max(min, current + (event.key === 'ArrowLeft' ? step : -step)));
+    resize(); saveWidth();
+  };
+  new ResizeObserver(resize).observe(container);
+  desktop.addEventListener('change', resize);
   function render() {
     $('changes-panel').hidden = !visible;
+    resize();
     $('toggle-changes').setAttribute('aria-expanded', String(visible));
     for (const tab of document.querySelectorAll('[data-source]')) { const selected = tab.dataset.source === source; tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1; }
     $('changes-content').setAttribute('aria-labelledby', `${source}-tab`);

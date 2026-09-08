@@ -1,120 +1,173 @@
 # Remote Codex
 
-Et browser-UI til dine eksisterende lokale Codex-sessioner. Browseren forbinder til en lille Node-server, som taler direkte med din kørende Codex-daemon. Codex arbejder fortsat på din maskine med din eksisterende konto og konfiguration.
+A browser interface for your existing local Codex sessions. A small Node.js server connects directly to your running Codex app-server daemon, so you can follow conversations, send instructions, handle approvals, and review changes from another computer. Codex continues working on its host machine with its existing account and configuration.
 
-Se også [undersøgelsen af T3 Code](docs/t3-code-research.md) som reference for arkitektur, enhedsparring og fjernadgang. Projektet fokuserer fortsat på Codex alene.
+This is an independent, experimental project, not an official OpenAI product or an integration into chatgpt.com. It focuses on Codex. The [T3 Code research notes](docs/t3-code-research.md) (in Danish) explain the architecture comparison behind that choice.
 
-## Start
+## Requirements
 
-Kræver Node.js 18.19+, npm og en kørende Codex app-server-daemon med en allerede konfigureret Codex-konto. Git skal være installeret for at bruge Git-fanen og køre Git-testene. Integrationen er verificeret mod **Codex 0.153.4 på Linux**. Protokollen er eksperimentel og versionsafhængig; andre Codex-versioner og operativsystemer er ikke garanteret at fungere.
+- Node.js **18.19 or later** and npm.
+- A running Codex app-server daemon with an already configured Codex account.
+- Git for the Git changes tab and Git-related tests.
+- A modern browser. Browser tests use Chromium through Playwright.
 
-Kør kommandoerne fra projektets rodmappe. Der er intet frontend-build-trin:
+The integration has been tested with **Codex 0.153.4 on Linux**. It uses experimental, version-dependent app-server methods. Compatibility with other Codex versions or operating systems is not guaranteed.
+
+## Quick start
+
+Run these commands in the project root:
 
 ```bash
 npm ci
 npm start
 ```
 
-Serveren lytter på **0.0.0.0:4310** (alle IPv4-netværksinterfaces). Åbn **http://127.0.0.1:4310** lokalt eller `http://MASKINENS-IP:4310` fra en anden pc. Netværksadresser udskrives ved start. Ved første start oprettes en adgangsnøgle i `.remote-codex/access-key` med filrettigheder `0600`. Vis den i din lokale terminal, og indsæt den på login-skærmen:
+There is no frontend build step. The web server listens on **0.0.0.0:4310**, covering all IPv4 network interfaces. Open **http://127.0.0.1:4310** on the host, or `http://HOST-IP:4310` from another computer. Available network addresses are printed at startup.
+
+On first startup, the server generates an access key in `.remote-codex/access-key` with file permissions `0600`. Display it in a trusted local terminal and paste it into the login form:
 
 ```bash
 cat .remote-codex/access-key
 ```
 
-Webserveren genbruger daemonen. Den starter eller genstarter ikke Codex, og den opretter ikke test-sessioner. Hvis der ikke allerede kører en daemon, kan du starte den med:
+The web server connects to an existing Codex daemon; it does not start or restart Codex or create test sessions. If a daemon is not already running, start it separately:
 
 ```bash
 codex app-server daemon start
 ```
 
-Stop webserveren med Ctrl+C; den eksisterende Codex-daemon og dens arbejde fortsætter. Webserveren skal køre, mens du bruger browseren. `npm start` installerer ingen systemtjeneste.
+Stop the web server with Ctrl+C. The Codex daemon and its work continue running. Keep the web server running while using the browser. `npm start` does not install a background system service.
 
-## Funktioner
+## Features
 
-- Sessionsliste med søgning, pagination, projektmappe og status.
-- Tilslutning til eksisterende aktive eller gemte sessions via `thread/resume`, uden konfigurationsoverskrivelser.
-- Samtalehistorik med tidligere sider, live-beskeder, kodeblokke, kommandooutput, filændringer og agentaktivitet.
-- Nye sessions i en lokal projektmappe.
-- Beskeder til en session. Under en aktiv tur sætter Enter beskeden i Codex-serverens vedvarende kø; knappen **Steer** sender en instruktion til den aktive tur.
-- Synlig beskedkø med redigering, annullering og **Send som steer**. Pil-op i et tomt chatfelt henter seneste købesked til redigering eller seneste sendte tekst som en ny kladde.
-- Dansk/engelsk sprogskifter og lyst/mørkt tema, gemt i browseren. Temaet følger systemet, indtil du vælger selv. Grøn/rød forbindelsesprik.
-- Separat filpanel med fanerne **Codex** og **Git**, filliste og farvet diff.
-- Stop af aktiv tur.
-- Engangsgodkendelse, afvisning og annullering af kommando- og filanmodninger, når daemonen leverer dem til denne klient.
-- Svar på `item/tool/requestUserInput`. Forslag i asynkrone spørgsmål kan indsættes som beskeder.
-- Automatisk genforbindelse, genindlæsning af historik og gendannelse af abonnementer. Sendte handlinger genafspilles aldrig automatisk.
-- Mobilvisning og sessionens adresse i URL-fragmentet. Kladder bevares ved sessionsskift i samme side; de gemmes ikke ved genindlæsning.
+- Searchable, paginated session list with project paths and activity status.
+- Existing active and saved sessions through `thread/resume`, without configuration overrides.
+- Conversation history, streamed responses, code blocks, command output, file changes, and agent activity.
+- New sessions with project directory suggestions, path validation, and optional directory creation.
+- Persistent Codex message queue with editing, cancellation, and conversion to a steering instruction.
+- Direct steering of an active turn, and interruption of the current turn.
+- One-time command and file approvals, rejection, and cancellation when Codex delivers those requests to this client.
+- Responses to `item/tool/requestUserInput`, with suggestions from asynchronous questions available as message drafts.
+- Separate **Codex** and **Git** changes tabs, a file list, colored diffs, and a draggable divider on desktop.
+- Danish and English UI translations, light and dark themes, and green/red connection status.
+- An activity indicator next to the message field, visible even when the conversation is scrolled up.
+- Automatic reconnection, history resynchronization, and restored subscriptions. Submitted actions are never replayed automatically.
+- Mobile navigation and session links in the URL fragment. Drafts survive switching sessions within the same page, but not a page reload.
 
-## Beskedkø, filpanel og oversættelser
+## Choosing a project directory
 
-Køen bruger de eksperimentelle `thread/queue/*`-metoder i Codex 0.153.4. Den tilhører Codex-serveren og genindlæses efter genforbindelse eller sideopdatering. Codex starter købeskeder, når sessionen bliver ledig. Redigering tager først beskeden ud af køen, så den ikke afsendes, mens du retter den. En allerede modtaget besked ændres ikke i historikken; pil-op gør dens tekst klar til en ny afsendelse. Beskeder under afsendelse vises uden redigeringsknapper. Ved uklar leveringsstatus gensendes intet automatisk. Kladder og tekst taget ud af køen er kun gemt i den åbne browserside.
+The **New session** dialog suggests existing directories on the web server's host and accessible project paths from previous sessions. Enter part of an absolute path, or use `~/` for the host user's home directory. A trailing `/` lists subdirectories. Choose a suggestion with the mouse or the up/down arrow keys followed by Enter. Clear the field to see previous projects. Long lists are capped; keep typing to narrow the results.
 
-**Codex** opsummerer gennemførte `fileChange`-elementer i den valgte sessions historik. Gentagne ændringer samles pr. fil; linjetal er summen af patches, ikke et netto-diff. Ændringer lavet gennem shell-kommandoer eller andre værktøjer vises kun her, hvis Codex registrerer dem som filændringer. **Git** viser projektets aktuelle staged, unstaged og untracked ændringer, også fra andre sessioner og manuelle rettelser. Visningen læser kun Git og ændrer hverken index eller filer. Projekter uden Git får en forklaring. Git-visningen forudsætter, at projektets filer er lokale på webserverens maskine.
+The dialog identifies paths that exist, are missing, point to a file, or are inaccessible. An existing accessible directory can be used immediately. For a missing directory, if the web server has permission to create it, select **Create the folder when starting the session**, then **Create folder and session**. Only that explicit action creates the directory and any missing parent directories.
 
-Filpanelet opdateres ved gennemførte filændringer og ture; brug opdateringsknappen for eksterne Git-ændringer. Meget store historier og diff begrænses, og afkortning markeres i UI’et. Binære untracked filer og symlink-indhold åbnes ikke som tekst.
+Directory creation does not initialize a Git repository. If Codex subsequently rejects session creation, the new directory remains in place so you can retry.
 
-Alle faste UI-tekster ligger i `public/locales.js`. Tilføj en sprogkode i `languages` og en tilsvarende ordbog i `messages` for flere sprog. Samtaleindhold, filnavne og originale Codex-fejl oversættes ikke.
+Directory lookups require authentication and read names and metadata, not file contents. For a remote Codex server, local suggestions and directory creation are disabled; enter an existing absolute path on that server instead. The project's working directory does not introduce an additional sandbox or permission boundary.
 
-## Adgang fra en anden maskine
+## Messages, editing, and the queue
 
-Webserveren lytter som standard på alle IPv4-netværksinterfaces. Brug `http://MASKINENS-IP:4310` fra en anden computer; mulige netværksadresser udskrives i terminalen ved start. Login kræves også ved netværksadgang. Uden en eksplicit `REMOTE_CODEX_ORIGIN` accepteres localhost og maskinens egne interface-IP-adresser; en fremmed Host eller en cross-origin-anmodning afvises stadig.
+When Codex is idle, Enter sends the message to start a turn. While Codex is working, Enter adds the message to its persistent queue; **Steer** sends an instruction to the current active turn. Shift+Enter inserts a newline.
 
-For kun at lytte lokalt kan du bruge `REMOTE_CODEX_HOST=127.0.0.1 npm start`. En SSH-tunnel kan derefter give en anden computer adgang. Kør på computeren med browseren:
+The queue uses the experimental `thread/queue/*` methods in Codex 0.153.4. It belongs to the Codex server and is reloaded after browser refreshes and reconnections. Codex starts queued messages when the session becomes available.
+
+- **Edit:** first removes the message from the queue, preventing it from being sent while you edit it.
+- **Cancel:** removes the queued message.
+- **Send as steer:** removes the message from the queue and submits its text to the active turn.
+- **Send now:** starts a queued message when there is no active turn.
+- **Arrow Up in an empty message field:** edits the most recent queued text message, or recalls the most recent sent text as a new draft.
+
+Already received messages are never edited in the conversation history. Editing mode ends automatically when Codex starts a new turn or receives the submitted text. Any unsent text remains a new draft. Messages being submitted are displayed without editing controls. If delivery cannot be confirmed, no action is replayed automatically; review the queue and conversation before retrying.
+
+Drafts and text removed from the queue are kept only in the current browser page. Reloading the page discards them; messages still in Codex's queue are retained by Codex.
+
+## Reviewing file changes
+
+The **Codex** tab summarizes completed `fileChange` items recorded in the selected session's history. Repeated changes are grouped by file. Added/removed line counts sum individual patches; they are not a net diff. Changes made through shell commands or other tools appear here only if Codex records them as file changes.
+
+The **Git** tab shows the project's current staged, unstaged, and untracked changes, including edits from other sessions or manual work. It only reads Git and does not change the index or working tree. Projects outside a Git repository show an explanation. This tab requires the project files to be local to the web server's host.
+
+The panel refreshes when file changes or turns complete. Use its refresh button to pick up external Git changes. Large histories and diffs are capped and marked as truncated. Binary untracked files and symlink contents are not opened as text.
+
+On desktop, drag the divider between the conversation and changes panel to give diffs more room. The width is remembered in the browser and constrained to the available space. Double-click to reset it. The divider supports Tab focus, left/right arrow keys, and Home/End for the minimum/maximum width. On smaller screens, the changes panel opens over the conversation.
+
+## Language and appearance
+
+Use the language selector and theme button on the login screen or in the workspace header. Preferences are stored in the browser. The theme follows the operating system until you select a theme explicitly. Controls still work for the current page if browser storage is unavailable.
+
+Fixed UI text lives in `public/locales.js`. To add a language, add its code to `languages` and provide a matching dictionary in `messages`. Conversation content, file names, and original upstream diagnostics remain unchanged.
+
+## Access from another computer
+
+The default binding is all IPv4 interfaces. Use `http://HOST-IP:4310` on a reachable network; authentication is required there as well. Without an explicit `REMOTE_CODEX_ORIGIN`, the server accepts localhost and its own interface IP addresses. Unexpected Host headers and cross-origin requests are rejected.
+
+Use HTTPS for network access or a trusted SSH tunnel. Do not send the access key over an unprotected public HTTP connection. The project does not configure DNS, certificates, tunnels, VPNs, or firewall rules.
+
+### SSH tunnel
+
+Bind the web server to localhost:
 
 ```bash
-ssh -N -L 4310:127.0.0.1:4310 BRUGERNAVN@CODEX-MASKINE
+REMOTE_CODEX_HOST=127.0.0.1 npm start
 ```
 
-Åbn derefter `http://127.0.0.1:4310` i browseren, og brug samme adgangsnøgle.
+On the computer with your browser, open a tunnel:
 
-Til en eksisterende VPN eller en HTTPS-reverse-proxy konfigureres lytteadresse og browserens præcise origin. Eksempel bag en HTTPS-proxy på samme maskine:
+```bash
+ssh -N -L 4310:127.0.0.1:4310 USERNAME@CODEX-HOST
+```
+
+Then visit `http://127.0.0.1:4310` and use the same access key.
+
+### HTTPS reverse proxy
+
+For an HTTPS proxy on the same host:
 
 ```bash
 REMOTE_CODEX_HOST=127.0.0.1 REMOTE_CODEX_ORIGIN=https://codex.example.com npm start
 ```
 
-Proxyen skal bevare `Host`-headeren, videresende til `127.0.0.1:4310` og slå buffering fra for `/api/events` (Server-Sent Events). Ingen browser-WebSocket er nødvendig. Brug HTTPS ved netværksadgang; send ikke adgangsnøglen over et ubeskyttet offentligt HTTP-netværk. Projektet konfigurerer ikke automatisk DNS, certifikater, tunnel eller VPN.
+The proxy must preserve the browser's Host header, forward to `127.0.0.1:4310`, disable buffering on `/api/events`, and allow long-lived Server-Sent Events connections. The browser does not need a WebSocket connection.
 
-## Konfiguration
+## Configuration
 
-Indstillinger læses fra processens miljø ved opstart. `.env`-filer indlæses ikke automatisk. Sæt variablerne i din shell eller din procesmanager. Eksempel med lokal binding og en anden port:
+Configuration is read from the process environment at startup. `.env` files are **not loaded automatically**. Set variables in your shell or process manager. For example:
 
 ```bash
 REMOTE_CODEX_HOST=127.0.0.1 REMOTE_CODEX_PORT=4400 npm start
 ```
 
-| Miljøvariabel | Standard / funktion |
+| Variable | Default / purpose |
 | --- | --- |
-| `REMOTE_CODEX_HOST` | `0.0.0.0` (alle IPv4-interfaces). Sæt `127.0.0.1` for kun lokal adgang. |
-| `REMOTE_CODEX_PORT` | `4310` |
-| `REMOTE_CODEX_ORIGIN` | Valgfri præcis browser-origin, fx `https://codex.example.com`, uden afsluttende `/`. Bruges ved eget domæne eller reverse-proxy; ellers accepteres maskinens lokale IP-adresser og localhost. |
-| `REMOTE_CODEX_TOKEN` | Valgfri adgangsnøgle på mindst 24 tegn. Ellers bruges den lokalt genererede fil. |
-| `CODEX_APP_SERVER_SOCKET` | `$CODEX_HOME/app-server-control/app-server-control.sock`, ellers `~/.codex/app-server-control/app-server-control.sock`. |
-| `CODEX_APP_SERVER_URL` | Valgfri eksisterende `ws://127.0.0.1:PORT` eller `wss://…` server i stedet for Unix-socket. |
-| `CODEX_APP_SERVER_TOKEN` | Valgfrit upstream bearer-token. Kun på serversiden. |
-| `CODEX_HOME` | Valgfri Codex-hjemmemappe, som bruges til at finde standard-socketen. Ellers bruges brugerens hjemmemappe plus `.codex`. |
+| `REMOTE_CODEX_HOST` | `0.0.0.0`, all IPv4 interfaces. Set `127.0.0.1` for local access only. |
+| `REMOTE_CODEX_PORT` | `4310`. |
+| `REMOTE_CODEX_ORIGIN` | Optional exact browser origin, such as `https://codex.example.com`, without a trailing slash. Use for a custom hostname or reverse proxy. Otherwise, local interface IPs and localhost are accepted. |
+| `REMOTE_CODEX_TOKEN` | Optional access key of at least 24 characters. Otherwise the locally generated key file is used. |
+| `CODEX_APP_SERVER_SOCKET` | `$CODEX_HOME/app-server-control/app-server-control.sock`, or `~/.codex/app-server-control/app-server-control.sock`. |
+| `CODEX_APP_SERVER_URL` | Optional existing `ws://127.0.0.1:PORT` or `wss://…` server instead of the Unix socket. Remote servers require `wss://`. |
+| `CODEX_APP_SERVER_TOKEN` | Optional upstream bearer token, used only by the server. |
+| `CODEX_HOME` | Optional Codex home directory used to locate the default socket. Otherwise the user's home directory plus `.codex` is used. |
 
-Browser-login anvender en HttpOnly, SameSite=Strict-cookie med 12 timers levetid; `Secure` sættes ved HTTPS-origin. Adgangsnøgler lægges ikke i URL'er eller browserens localStorage. API'et validerer Host, Origin og JSON-indholdstype, begrænser loginforsøg og eksponerer kun de implementerede sessionshandlinger. Samtaletekst indsættes som DOM-tekst, ikke rå HTML. API-svar og samtaler caches ikke.
+Browser login uses an HttpOnly, SameSite=Strict cookie with a 12-hour lifetime. `Secure` is set when the configured origin uses HTTPS. Access keys are not stored in URLs or browser localStorage. The API validates Host, Origin, and JSON content type, rate-limits login attempts, and exposes only its implemented actions. Conversation content is inserted as DOM text rather than raw HTML. API responses and conversation data are not cached.
 
-Genstart af webserveren logger browserne ud. For at rotere nøglen kan du stoppe webserveren, fjerne `.remote-codex/access-key` og starte den igen (eller ændre `REMOTE_CODEX_TOKEN`). Adgang til UI'et giver kontrol over de sessions, som den tilsluttede daemon stiller til rådighed.
+Restarting the web server invalidates browser logins. To rotate the access key, stop the server, remove `.remote-codex/access-key`, and restart it, or change `REMOTE_CODEX_TOKEN`. Authenticated access grants control over the sessions exposed by the connected daemon.
 
-## Privatliv og repository-indhold
+## Privacy and repository contents
 
-Repositoryet indeholder kildekode, dokumentation og syntetiske testdata. Det kræver ingen medfølgende API-nøgler eller konto-oplysninger. Codex-kontoen og modeladgangen håndteres af den eksisterende daemon. Browserens adgangsnøgle er en separat nøgle til denne webserver.
+The repository contains source code, documentation, and synthetic test fixtures. It does not require bundled API keys or account credentials. The existing Codex daemon manages the Codex account and model access. The browser access key is a separate credential for this web server.
 
-`.gitignore` udelukker blandt andet:
+`.gitignore` excludes:
 
-- Hele `.remote-codex/`, inklusive `.remote-codex/access-key`.
-- Miljøfiler som `.env` og `.env.production`, lokale indstillingsfiler og privat nøglemateriale.
-- Lokale Codex-, agent- og editorindstillinger.
-- Logs, browsertraces, screenshots i testmapperne og andre genererede testrapporter.
-- Afhængigheder og build-output.
+- All of `.remote-codex/`, including `.remote-codex/access-key`.
+- Environment files such as `.env` and `.env.production`, local settings, and private key material.
+- Local Codex, agent, and editor configuration.
+- Logs, browser traces, screenshots in test directories, and generated reports.
+- Dependencies and build output.
 
-Eventuelle `.env.example`- og `.env.sample`-filer kan versionsstyres, men må kun indeholde pladsholdere. De faste adgangsnøgler og adresser i testkoden er offentlige, syntetiske fixtures; de må ikke bruges til en rigtig installation. Dokumentationens værtsnavne, brugernavne og stier er generiske eksempler.
+`.env.example` and `.env.sample` files may be tracked but must contain placeholders only. Hardcoded test access keys are public, synthetic fixtures and must never be used for a real installation. Documentation examples use generic hostnames, usernames, and paths.
 
-UI'et viser efter login rigtige projektstier, samtaler, værktøjsoutput og filindhold. Disse data kan være private. Git-ignore-regler beskytter mod utilsigtet versionsstyring af de angivne filer; de er ikke et filter på Codex-historik eller en garanti for, at vilkårlige fremtidige filer er ufølsomme. Undgå derfor at lægge produktionslogs og screenshots med sessionsindhold i kildekodemapperne.
+After login, the UI intentionally displays real project paths, conversations, tool output, and file contents. That information can be private. Ignore rules protect against accidentally committing the listed files; they do not filter Codex history or guarantee that arbitrary future files contain no sensitive information. Keep production logs and screenshots of real sessions out of source directories.
 
-Kontrollér ignore-reglen og det materiale, der er valgt til et commit, med:
+Before committing, check ignored credentials and review the selected content:
 
 ```bash
 git check-ignore -v .remote-codex/access-key
@@ -122,56 +175,52 @@ git status --short
 git diff --cached
 ```
 
-## Projektstruktur
+## Project layout
 
 ```text
-public/                 HTML, CSS og browserens JavaScript-moduler
-  app.js                Sessionsnavigation, samtaler og godkendelser
-  state.js              Historik og behandling af live-events
-  queue.js              Beskedkø, redigering og genafsendelse
-  changes.js            Filpanel og diffvisning
-  locales.js            Oversættelser
-  i18n.js               Oversættelsesfunktioner og sprogkontroller
-  preferences.js        Tema og sprog før første visning
+public/                 HTML, CSS, and browser JavaScript modules
+  app.js                Session navigation, conversations, and approvals
+  state.js              History and live-event reduction
+  queue.js              Queued messages, editing, and resubmission
+  changes.js            Changes panel, diffs, and resizing
+  projects.js           Directory suggestions and new-session dialog
+  locales.js            Translation dictionaries
+  i18n.js               Translation helpers and language controls
+  preferences.js        Theme and language applied before first paint
 server/
-  index.js              Opstart, adgangsnøgle og miljøkonfiguration
-  http.js               Browser-API, statiske filer, login og SSE
-  codex.js              Forbindelse til Codex-daemonen
-  changes.js            Opsummering af Codex-ændringer og læsning af Git
-test/                   Unit-, integrations- og browsertests
-docs/                   Arkitekturundersøgelse og referencer
+  index.js              Startup, access key, and environment configuration
+  http.js               Browser API, static assets, authentication, and SSE
+  codex.js              Connection to the existing Codex daemon
+  changes.js            Codex change summaries and read-only Git operations
+  projects.js           Directory lookup, validation, and explicit creation
+test/                   Unit, integration, and browser tests
+docs/                   Architecture research and references
 ```
 
-## Arkitektur og protokol
+## Architecture and protocol
 
 ```text
-Browser ── HTTP(S), cookie, SSE ── Node-webserver
+Browser ── HTTP(S), cookie, SSE ── Node web server
                                        │
                             JSON-RPC / WebSocket
                                        │
-                         Eksisterende Codex-daemon
-                              på Unix-socket
+                            Existing Codex daemon
+                              through Unix socket
 ```
 
-`server/codex.js` håndterer handshake, RPC-ID'er, serveranmodninger og reconnect. `server/http.js` afgrænser browser-API'et, godkendelser og login. `public/state.js` samler sessions- og turn-events. Frontenden er almindelig JavaScript og CSS uden build-trin; `ws` er eneste runtime-afhængighed.
+`server/codex.js` handles initialization, RPC correlation, server requests, and reconnection. `server/http.js` defines the browser API, approval handling, and authentication. `public/state.js` combines session and turn events. The frontend uses plain JavaScript and CSS without a build step; `ws` is the only runtime dependency.
 
-Unix-socketen bruger et HTTP WebSocket Upgrade-håndtryk. `perMessageDeflate` er bevidst deaktiveret: den installerede daemon lukkede forbindelsen, når klienten tilbød komprimering. `codex app-server proxy` er en byte-proxy til dette transportlag, ikke et JSONL-interface.
+The Unix socket uses an HTTP WebSocket Upgrade handshake. `perMessageDeflate` is deliberately disabled because the tested daemon closed the connection when compression was offered. `codex app-server proxy` is a byte proxy for this transport, not a JSONL interface.
 
-Der oprettes ét delt upstream-abonnement pr. åbnet session. Flere browserfaner ser samme serveranmodninger; en anmodning kan kun besvares én gang. Lukning af en browser stopper ikke Codex. Upstream-abonnementer bliver i broen frem til dens genstart for at bevare live-aktivitet og ventende anmodninger.
+The bridge maintains one shared upstream subscription for each opened session. Multiple browser tabs see the same approval request, which can be answered only once. Closing a browser does not stop Codex. Subscriptions remain in the bridge until its restart to retain live activity and pending requests.
 
-Den officielle [Codex App Server-dokumentation](https://learn.chatgpt.com/docs/app-server) beskriver protokollen. Lokale protokoltyper kan genereres for din installerede version:
+See the official [Codex App Server documentation](https://learn.chatgpt.com/docs/app-server). Generate protocol types for an installed Codex version with:
 
 ```bash
 codex app-server generate-ts --experimental --out /tmp/remote-codex-protocol
 ```
 
-## Afgrænsning
-
-Dette er en selvstændig browserklient, ikke en integration i chatgpt.com eller OpenAI's Remote Control-relay. Den tilslutter sig den daemon, du angiver. Sessions i en separat Codex-proces er ikke automatisk samme live-runtime; gemte sessions kan vises, men for fælles live-kontrol skal klienterne bruge samme app-server.
-
-UI'et bevarer sessionens godkendelsespolitik og reviewer. Anmodninger, som behandles af automatisk review eller kun vises i en anden klient, ændres ikke til browsergodkendelser. Udvidede permission grants, MCP-elicitation, dynamiske klientværktøjer og andre ikke-understøttede serveranmodninger henvises til den oprindelige klient. Uploads, voice, interaktiv terminal og fuld app-paritet er ikke implementeret. Markdown-visningen understøtter tekst, links, fed, inline-kode og kodeblokke.
-
-## Test
+## Development and testing
 
 ```bash
 npm run check
@@ -180,25 +229,32 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-Integrationstests bruger midlertidige lokale HTTP/WebSocket-servere. Browsertests bruger en isoleret fixture på port 4311, aldrig dine rigtige sessioner. De dækker login, adgangskontrol, sikker tekstvisning, historik, streaming, godkendelser, spørgsmål, styring, stop, kladder, genindlæsning og mobilnavigation. Transporttesten dækker reconnect og sikrer, at handlinger ikke gensendes. Derudover testes sprog- og temaskift, filpanel, Git-status/diff, køens redigering/annullering/steer, afsendelsesfejl og samtidige køhandlinger. Tests kræver tilladelse til lokale sockets og browserprocesser.
+Integration tests use temporary local HTTP/WebSocket servers and Git repositories. Browser tests use an isolated fixture on port 4311, never real Codex sessions. They cover authentication, access control, safe rendering, history, streaming, approvals, questions, steering, interruption, drafts, reloads, and mobile navigation. They also cover translations, themes, directory suggestions and creation, Git diffs, panel resizing, queue editing/cancellation, delivery failures, and concurrent queue actions. Transport tests verify reconnection and that actions are not automatically replayed.
 
-Til udvikling kan `npm run dev` genstarte webserveren ved kodeændringer. Browserfiler serveres direkte fra `public/`; genindlæs siden efter ændringer. Genstart af serveren kræver et nyt browser-login. Playwright kan kræve yderligere operativsystempakker for at starte Chromium. Testresultater ligger i ignorerede mapper og skal ikke committes.
+Tests require permission to open local sockets and run browser processes. Playwright may require additional operating system packages to launch Chromium. Reports and traces are written to ignored directories.
 
-## Fejlfinding
+Use `npm run dev` to restart the web server when source files change. Browser assets are served directly from `public/`; reload the page after edits. Server restarts require a new browser login.
 
-| Symptom | Kontrollér |
+## Troubleshooting
+
+| Symptom | What to check |
 | --- | --- |
-| Rød forbindelsesprik | Kører Codex-daemonen, og peger `CODEX_APP_SERVER_SOCKET` eller `CODEX_APP_SERVER_URL` på den rigtige transport? Se webserverens terminal for fejl. |
-| Login afvises | Brug den aktuelle nøgle fra `.remote-codex/access-key`, eller værdien af `REMOTE_CODEX_TOKEN`, hvis den er sat. Efter gentagne fejl kan login være midlertidigt begrænset. |
-| Siden kan ikke åbnes fra en anden computer | Brug servermaskinens adresse, kontrollér binding, firewall og netværksrute. `127.0.0.1` henviser til computeren, hvor browseren kører. |
-| Host eller Origin afvises | Ved eget domæne skal `REMOTE_CODEX_ORIGIN` matche den præcise browser-origin med protokol og eventuel port, uden afsluttende skråstreg. |
-| Sessions vises, men en aktiv tur mangler | Kontrollér, at den lokale klient og webserveren bruger samme app-server. Gemte sessions kan stamme fra andre processer. |
-| Køfunktionen er utilgængelig | Den tilsluttede Codex-version eller session understøtter muligvis ikke de eksperimentelle kømetoder. Steer kan stadig bruges på en aktiv tur. |
-| Git-fanen viser ingen repository | Sessionens projektmappe skal ligge i et Git-repository, der er tilgængeligt for webserverens bruger. |
-| En filændring mangler i Codex-fanen | Fanen viser registrerede, gennemførte `fileChange`-elementer. Brug Git-fanen for den aktuelle arbejdsmappe, og vær opmærksom på markeret afkortning. |
-| Porten er optaget | Stop den anden webserver, eller vælg en anden `REMOTE_CODEX_PORT`. |
-| Live-opdateringer kommer først forsinket gennem en proxy | Slå buffering fra på `/api/events`, og sørg for, at proxyen tillader langvarige SSE-forbindelser. |
+| Red connection indicator | Confirm that the Codex daemon is running and the configured socket or server URL points to it. Inspect the web server's terminal for errors. |
+| Login rejected | Use the current access-key file or `REMOTE_CODEX_TOKEN`, if set. Repeated failures may temporarily rate-limit login. |
+| Another computer cannot open the page | Check the host address, binding, firewall, and network route. `127.0.0.1` refers to the computer running the browser. |
+| Host or Origin rejected | For a custom hostname, set `REMOTE_CODEX_ORIGIN` to the exact browser origin, including scheme and any port, without a trailing slash. |
+| Saved sessions appear but active work is missing | Confirm that both clients use the same app-server. Saved sessions may originate from separate processes. |
+| Queue unavailable | The Codex version or session may not support experimental queue methods. Steering may still work for an active turn. |
+| Project path rejected | Select a directory accessible to the web server. Missing directories require explicit creation; a file cannot be used as a project directory. |
+| Git tab reports no repository | The project's working directory must belong to a Git repository accessible to the web server's user. |
+| An edit is missing from the Codex tab | This tab shows completed, recorded `fileChange` items. Use Git for current working-tree changes and check for truncation notices. |
+| Port already in use | Stop the conflicting web server or set a different `REMOTE_CODEX_PORT`. |
+| Delayed live updates through a proxy | Disable buffering for `/api/events` and allow long-lived SSE connections. |
 
-## Projektstatus
+## Scope and limitations
 
-Remote Codex er en selvstændig, eksperimentel browserklient. Projektet er ikke et officielt OpenAI-produkt. Der medfølger ingen cloudtjeneste, automatisk publicering, enhedsparring eller systemtjeneste. `package.json` har `private: true`, så pakken ikke ved en fejl publiceres til npm.
+This client connects to the daemon you configure. A session running in a separate Codex process is not automatically the same live runtime. Saved conversations can be listed, but shared live control requires the same app-server.
+
+Existing approval policies and reviewers remain in effect. Requests handled by automatic review or another client are not converted into browser approvals. Extended permission grants, MCP elicitation, dynamic client tools, and other unsupported server requests are referred to the original client.
+
+Uploads, voice, an interactive terminal, and full official-app parity are not implemented. Markdown rendering supports text, links, bold text, inline code, and code blocks. There is no hosted relay, device-pairing service, automatic deployment, or installed system service. `package.json` uses `private: true` to prevent accidental npm publication; this does not prevent a public GitHub repository.

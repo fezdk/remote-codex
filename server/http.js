@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { messages } from '../public/locales.js';
 import { codexChanges, gitChanges, gitFileDiff } from './changes.js';
+import { suggestProjects, prepareProject } from './projects.js';
 import { readFile } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { resolve, isAbsolute } from 'node:path';
@@ -8,7 +9,7 @@ import { networkInterfaces } from 'node:os';
 
 const cookieName = 'remote_codex_session';
 const mime = { '/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8', '/state.js': 'text/javascript; charset=utf-8', '/style.css': 'text/css; charset=utf-8', '/icon.svg': 'image/svg+xml' };
-for (const name of ['preferences.js', 'i18n.js', 'locales.js', 'changes.js', 'queue.js']) mime[`/${name}`] = 'text/javascript; charset=utf-8';
+for (const name of ['preferences.js', 'i18n.js', 'locales.js', 'changes.js', 'queue.js', 'projects.js']) mime[`/${name}`] = 'text/javascript; charset=utf-8';
 const idOK = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(value);
 const fail = (errorKey, status = 400) => Object.assign(new Error(messages.en[errorKey] || errorKey), { status, errorKey });
 const equal = (a, b) => timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
@@ -47,6 +48,7 @@ export function approvalResult(request, input) {
 }
 
 export function createWebServer({ codex, token, publicDir, origin, defaultCwd = process.cwd() }) {
+  const localProjects = !codex.options?.url || ['localhost', '127.0.0.1', '[::1]'].includes(new URL(codex.options.url).hostname);
   const sessions = new Map();
   const streams = new Map();
   const attempts = new Map();
@@ -133,10 +135,27 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
         });
         json(200, result); return;
       }
+      if (path === '/api/projects' && req.method === 'GET') {
+        if (!localProjects) { json(200, { state: 'remote', suggestions: [], canCreate: false }); return; }
+        const query = url.searchParams.get('path') || '';
+        if (query.length > 4096) throw fail('error.path');
+        let recent = [defaultCwd];
+        try {
+          const result = await codex.rpc('thread/list', { limit: 100, sortKey: 'updated_at', sortDirection: 'desc', useStateDbOnly: true, modelProviders: [], sourceKinds: ['cli', 'vscode', 'exec', 'appServer', 'unknown'] });
+          recent.push(...result.data.map(thread => thread.cwd));
+        } catch { /* Filesystem suggestions also work without session history. */ }
+        json(200, await suggestProjects(query, recent)); return;
+      }
       if (path === '/api/threads' && req.method === 'POST') {
         const input = await body(req);
-        if (typeof input.cwd !== 'string' || !isAbsolute(input.cwd)) throw fail('error.path');
-        const result = await codex.rpc('thread/start', { cwd: input.cwd });
+        let cwd;
+        if (localProjects) cwd = await prepareProject(input.cwd, input.createDirectory);
+        else {
+          if (typeof input.cwd !== 'string' || !isAbsolute(input.cwd)) throw fail('error.path');
+          if (input.createDirectory) throw fail('projects.remote');
+          cwd = input.cwd;
+        }
+        const result = await codex.rpc('thread/start', { cwd });
         codex.subscriptions.add(result.thread.id);
         json(201, result); return;
       }

@@ -51,8 +51,9 @@ test('mobile: navigation, no overflow, search and new project session',async({pa
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.screenshot({path:'test-results/mobile.png',fullPage:true,animations:'disabled'});
   await page.getByRole('button',{name:'Vis sessions',exact:true}).click();await page.getByRole('button',{name:'Ny session',exact:false}).click();
-  await page.getByLabel('Projektmappe',{exact:true}).fill('/home/demo/new-project');await page.getByRole('button',{name:'Opret session'}).click();
-  await expect(page.locator('#session-path')).toHaveText('/home/demo/new-project');
+  const newPath=(await page.locator('#cwd').inputValue())+'/new-project';
+  await page.getByLabel('Projektmappe',{exact:true}).fill(newPath);await expect(page.locator('#project-status')).toContainText('Mappen findes ikke');await page.locator('#create-directory').check();await page.getByRole('button',{name:'Opret mappe og session'}).click();
+  await expect(page.locator('#session-path')).toHaveText(newPath);
 });
 test('preferences, translated drafts, changes tabs and queue edit/cancel/steer/recall',async({page})=>{
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -67,7 +68,7 @@ test('preferences, translated drafts, changes tabs and queue edit/cancel/steer/r
   await expect(page.locator('#queue-list')).toContainText('Queue edited');
   await page.getByRole('button',{name:'Send som steer',exact:true}).click();
   await expect(page.locator('#messages')).toContainText('Queue edited');await expect(page.locator('#queue-list')).toBeEmpty();
-  await page.locator('#message').press('ArrowUp');await expect(page.locator('#message')).toHaveValue('Queue edited');await expect(page.locator('#edit-mode')).toContainText('Tidligere besked');
+  await page.locator('#message').press('ArrowUp');await expect(page.locator('#message')).toHaveValue('Queue edited');await expect(page.locator('#edit-mode')).toBeHidden();
   await page.locator('#message').fill('cancel me');await page.locator('#send').click();await expect(page.locator('#queue-list')).toContainText('cancel me');
   await page.getByRole('button',{name:'Annullér besked',exact:true}).click();await expect(page.locator('#queue-list')).toBeEmpty();
   await page.locator('#interrupt').click();await expect(page.locator('#session-status')).toHaveText('Klar');
@@ -123,4 +124,77 @@ test('queue consumption races do not resend; failed steer preserves text and dis
   await page.locator('#interrupt').click();
   await page.route('**/api/events',route=>route.fulfill({contentType:'text/event-stream',body:'event: status\ndata: {"state":"disconnected"}\n\n'}));await page.reload();await expect(page.locator('#connection-label')).toHaveText('Forbindelse afbrudt');
   const theme=await page.locator('html').getAttribute('data-theme');expect(await page.locator('#connection .status-dot').evaluate(el=>getComputedStyle(el).backgroundColor)).toBe(theme==='light'?'rgb(205, 52, 52)':'rgb(242, 105, 105)');
+});
+test('processing ends editing on live turn start and message receipt without losing the next draft',async({page})=>{
+  await login(page);
+  await page.locator('#message').fill('long');await page.locator('#send').click();await expect(page.locator('#interrupt')).toBeVisible();
+  await page.locator('#message').fill('withdraw this');await page.locator('#send').click();await expect(page.locator('#queue-list')).toContainText('withdraw this');
+  await page.locator('#message').press('ArrowUp');await expect(page.locator('#edit-mode')).toBeVisible();await page.locator('#message').fill('my next draft');
+  await page.locator('#interrupt').click();await expect(page.locator('#session-status')).toHaveText('Klar');
+  // Another client starts work while this browser has an edit open.
+  await page.request.post('/api/threads/session-one/message',{data:{text:'long'}});
+  await expect(page.locator('#edit-mode')).toBeHidden();await expect(page.locator('#message')).toHaveValue('my next draft');
+  await expect(page.locator('#composer-status')).toContainText('Codex arbejder');
+  await page.locator('#timeline').evaluate(el=>{el.scrollTop=0;});await expect(page.locator('#composer-status')).toBeInViewport();
+  await expect(page.locator('#send')).toHaveAttribute('aria-label','Sæt besked i kø');
+  await page.locator('#send').click();await expect(page.locator('#queue-list')).toContainText('my next draft');
+  await page.locator('#message').press('ArrowUp');await expect(page.locator('#edit-mode')).toBeVisible();await page.locator('#message').fill('steer with delayed acknowledgement');
+  let release;const gate=new Promise(resolve=>{release=resolve;});
+  await page.route('**/message',async route=>{const response=await route.fetch();await gate;await route.fulfill({response});});
+  try {
+    await page.locator('#steer').click();
+    await expect(page.locator('#messages')).toContainText('steer with delayed acknowledgement');
+    await expect(page.locator('#edit-mode')).toBeHidden();await expect(page.locator('#queue-list')).not.toContainText('Sender…');
+    await page.locator('#message').fill('new text while the response is pending');
+  } finally {release();}
+  await expect(page.locator('#send')).toBeEnabled();await expect(page.locator('#message')).toHaveValue('new text while the response is pending');
+  await page.unroute('**/message');await page.locator('#interrupt').click();await expect(page.locator('#composer-status')).toBeHidden();
+  await page.locator('#message').fill('');await page.locator('#message').press('ArrowUp');await expect(page.locator('#edit-mode')).toBeHidden();await expect(page.locator('#message')).toHaveValue('steer with delayed acknowledgement');
+});
+test('active snapshot shows processing and queues new messages before turn details arrive',async({page})=>{
+  await login(page);
+  await page.route('**/session-one/open',async route=>{const response=await route.fetch();const body=await response.json();body.thread.status={type:'active',activeFlags:[]};await route.fulfill({response,json:body});});
+  await page.reload();
+  await expect(page.locator('#composer-status')).toContainText('Codex arbejder');await expect(page.locator('#session-status')).toHaveText('Arbejder');
+  await page.locator('#message').fill('next task before turn details');await expect(page.locator('#send')).toHaveAttribute('aria-label','Sæt besked i kø');await expect(page.locator('#steer')).toBeDisabled();
+  await page.locator('#send').click();await expect(page.locator('#queue-list')).toContainText('next task before turn details');
+  await page.getByRole('button',{name:'Annullér besked',exact:true}).click();await expect(page.locator('#queue-list')).toBeEmpty();
+});
+
+test('new session suggests folders with keyboard selection and validates missing paths',async({page})=>{
+  await login(page);const root=await page.locator('#session-path').textContent();
+  await page.locator('#new-session').click();await page.locator('#cwd').fill(root+'/new-');
+  await expect(page.locator('#project-suggestions')).toContainText(root+'/new-project');
+  await page.locator('#cwd').press('ArrowDown');await page.locator('#cwd').press('Enter');await expect(page.locator('#cwd')).toHaveValue(root+'/new-project');await expect(page.locator('#create-session')).toBeEnabled();
+  await page.locator('#cwd').fill(root+'/untracked.txt');await expect(page.locator('#project-status')).toContainText('Stien peger på en fil');await expect(page.locator('#create-session')).toBeDisabled();
+  await page.locator('#cwd').fill(root+'/brand new project');await expect(page.locator('#project-status')).toContainText('Mappen findes ikke');await expect(page.locator('#create-session')).toBeDisabled();
+  await page.locator('#create-directory').check();await expect(page.locator('#create-session')).toHaveText(/Opret mappe og session/);
+  await page.evaluate(()=>window.remoteCodexPreferences.set('language','en'));await expect(page.locator('#create-session')).toHaveText(/Create folder and session/);await expect(page.locator('#cwd')).toHaveValue(root+'/brand new project');
+  await page.locator('#cwd').fill(root);await expect(page.locator('#project-status')).toContainText('The folder exists');await expect(page.locator('#create-directory')).not.toBeChecked();await expect(page.locator('#create-session')).toHaveText(/Create session/);
+  await page.locator('#close-dialog').click();
+});
+test('changes divider resizes, keeps drafts and selection, remembers width and adapts to mobile',async({page})=>{
+  await login(page);
+  const panel=page.locator('#changes-panel'),divider=page.getByRole('separator',{name:'Tilpas filpanelets bredde'});
+  await page.locator('#message').fill('Keep this draft');await page.locator('.changed-file').first().click();
+  const selected=await page.locator('#change-detail h3').first().textContent();
+  const initial=await panel.boundingBox(),handle=await divider.boundingBox();
+  await page.mouse.move(handle.x+handle.width/2,handle.y+70);await page.mouse.down();await page.mouse.move(handle.x-220,handle.y+70,{steps:8});await page.mouse.up();
+  expect((await panel.boundingBox()).width).toBeGreaterThan(initial.width+200);
+  await expect(page.locator('#message')).toHaveValue('Keep this draft');await expect(page.locator('#change-detail h3').first()).toHaveText(selected);
+  const resized=(await panel.boundingBox()).width;
+  await divider.focus();await divider.press('ArrowLeft');expect((await panel.boundingBox()).width).toBe(resized+20);
+  await divider.press('End');expect((await page.locator('.conversation').boundingBox()).width).toBeGreaterThanOrEqual(359);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.locator('#message').fill('long');await page.locator('#send').click();await expect(page.locator('#interrupt')).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.locator('#interrupt').click();
+  await divider.press('Home');expect((await panel.boundingBox()).width).toBe(280);
+  await divider.dblclick();expect((await panel.boundingBox()).width).toBe(350);
+  await divider.press('ArrowLeft');const remembered=(await panel.boundingBox()).width;
+  await page.locator('#close-changes').click();await expect(divider).toBeHidden();await page.locator('#toggle-changes').click();expect((await panel.boundingBox()).width).toBe(remembered);
+  await page.reload();await expect(divider).toBeVisible();expect((await panel.boundingBox()).width).toBe(remembered);
+  await page.setViewportSize({width:390,height:844});await expect(divider).toBeHidden();expect((await panel.boundingBox()).width).toBeLessThanOrEqual(390);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.setViewportSize({width:1440,height:1000});await expect(divider).toBeVisible();expect((await panel.boundingBox()).width).toBe(remembered);
+  const cancelHandle=await divider.boundingBox();await page.mouse.move(cancelHandle.x+4,cancelHandle.y+70);await page.mouse.down();await page.mouse.move(cancelHandle.x-120,cancelHandle.y+70);await page.keyboard.press('Escape');await page.mouse.up();expect((await panel.boundingBox()).width).toBe(remembered);await expect(page.locator('body')).not.toHaveClass(/resizing-changes/);
 });

@@ -12,6 +12,10 @@ export function activeTurn(state) {
   return state.turns.findLast(turn => turn.status === 'inProgress');
 }
 
+export function isWorking(state) {
+  return Boolean(activeTurn(state) || state.thread?.status?.type === 'active');
+}
+
 export function applyEvent(state, message) {
   const p = message.params || {};
   if (message.id !== undefined) {

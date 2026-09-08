@@ -1,7 +1,8 @@
+import { initProjects } from './projects.js';
 import { initChanges } from './changes.js';
 import { initQueue } from './queue.js';
 import { t, initPreferences, showError } from './i18n.js';
-import { createState, mergeTurns, activeTurn, applyEvent, title, project } from './state.js';
+import { createState, mergeTurns, activeTurn, isWorking, applyEvent, title, project } from './state.js';
 
 const $ = id => document.getElementById(id);
 const state = createState();
@@ -171,7 +172,7 @@ function renderHeader() {
   $('session-title').textContent = sessionTitle(state.thread);
   $('session-path').textContent = state.thread.cwd || '';
   $('model-label').textContent = [state.thread.model || 'Codex', state.thread.reasoningEffort].filter(Boolean).join(' · ');
-  const active = activeTurn(state) || state.thread.status?.type === 'active';
+  const active = isWorking(state);
   const waiting = [...state.requests.values()].some(r => r.params?.threadId === state.selectedId);
   $('session-status').textContent = state.loading ? t('status.loading') : waiting ? t('status.waiting') : active ? t('status.working') : t('status.ready');
   $('session-status').className = `session-status ${active ? 'active' : ''}`;
@@ -249,11 +250,16 @@ function renderMessages(forceBottom = false) {
   }
   $('messages').replaceChildren(fragment);
   $('older-turns').hidden = !turnsCursor || state.loading;
-  $('activity').hidden = !activeTurn(state);
+  $('activity').hidden = !state.connected || !isWorking(state);
   timeline.scrollTop = bottom ? timeline.scrollHeight : scrollTop;
 }
 function renderControls() {
   const active = activeTurn(state);
+  const working = isWorking(state);
+  const waiting = [...state.requests.values()].some(request => request.params?.threadId === state.selectedId);
+  $('composer-status').hidden = !state.connected || state.loading || !working;
+  $('composer-status').classList.toggle('waiting', waiting);
+  $('composer-status-label').textContent = t(waiting ? 'status.waiting' : 'session.processing');
   const unavailable = state.thread?.canAcceptDirectInput === false;
   const disabled = !state.connected || !state.ready || state.loading || unavailable;
   $('send').disabled = disabled || !$('message').value.trim();
@@ -353,14 +359,8 @@ $('older-turns').onclick=async()=>{
   try { const page=await api(`/api/threads/${encodeURIComponent(id)}/turns?cursor=${encodeURIComponent(cursor)}`);if(version!==openVersion)return;state.turns=mergeTurns(page.data,state.turns);turnsCursor=page.nextCursor;renderMessages();$('timeline').scrollTop=oldTop+$('timeline').scrollHeight-oldHeight; }
   catch(error){notice(error);}finally{button.disabled=false;}
 };
-function newDialog(){ $('cwd').value=state.thread?.cwd || defaultCwd;$('new-error').textContent='';$('new-dialog').showModal(); }
-$('new-session').onclick=newDialog;$('welcome-new').onclick=newDialog;
-$('close-dialog').onclick=()=>$('new-dialog').close();
-$('new-form').onsubmit=async event=>{
-  event.preventDefault();$('create-session').disabled=true;
-  try{const result=await api('/api/threads',{cwd:$('cwd').value.trim()});$('new-dialog').close();await loadThreads();await openThread(result.thread.id);}
-  catch(error){showError($('new-error'), error);notice(error);}finally{$('create-session').disabled=false;}
-};
+$('new-session').onclick = () => projects.open();
+$('welcome-new').onclick = () => projects.open();
 $('message').oninput=()=>{drafts.set(state.selectedId,$('message').value);renderControls();};
 $('message').onkeydown=event=>{queue.keydown(event);if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('send').disabled)$('composer').requestSubmit();}};
 $('composer').onsubmit=event=>{event.preventDefault();queue.submit();};
@@ -369,5 +369,6 @@ window.addEventListener('hashchange',()=>{const id=new URLSearchParams(location.
 setInterval(()=>{if(state.connected&&!document.hidden&&!state.loading)loadThreads().catch(()=>{});},30000);
 const changes = initChanges({ api, getState: () => state });
 const queue = initQueue({ api, getState: () => state, notice, renderApp: renderAll, saveDraft: (id, text) => drafts.set(id, text) });
-initPreferences(() => { renderConnection(); renderAll(); changes.render(); });
+const projects = initProjects({ api, getDefaultCwd: () => state.thread?.cwd || defaultCwd, onCreated: async result => { await loadThreads(); await openThread(result.thread.id); } });
+initPreferences(() => { renderConnection(); renderAll(); changes.render(); projects.render(); });
 enter().catch(()=>showLogin());
