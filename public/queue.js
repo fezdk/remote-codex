@@ -2,11 +2,11 @@ import { t, errorText } from './i18n.js';
 import { activeTurn, isWorking, applyEvent, createSteerTracker } from './state.js';
 const $ = id => document.getElementById(id);
 const textOf = item => (item.input || []).filter(part => part.type === 'text').map(part => part.text).join('\n');
-const textOnly = item => item.input?.length && item.input.every(part => part.type === 'text');
+const textOnly = item => item.input?.some(part => part.type === 'text') && item.input.every(part => ['text', 'skill'].includes(part.type));
 const node = (tag, cls, text) => { const el = document.createElement(tag); el.className = cls; if (text != null) el.textContent = text; return el; };
 const clientId = () => [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, '0')).join('');
 
-export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraft }) {
+export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraft, skillsFor = () => [], handleCommand = () => false }) {
   let threadId, items = [], revision = 0, generation = 0, failure, more = false, timer;
   const pending = new Map(), failed = new Map(), editing = new Map(), busy = new Set();
   const steers = createSteerTracker();
@@ -103,7 +103,7 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
         submission = { ...item, id: clientId(), steer: true, turnId: turn.id };
         steers.track(id, submission, turns); pending.set(id, submission);
         if (threadId === id) { items = items.filter(other => other.id !== item.id); renderApp(true); }
-        await api(`/api/threads/${encodeURIComponent(id)}/message`, { text: textOf(item), turnId: turn.id });
+        await api(`/api/threads/${encodeURIComponent(id)}/message`, { text: textOf(item), turnId: turn.id, skills: item.input.filter(part => part.type === 'skill').map(part => part.name) });
         if (epoch !== generation) return;
         submission.confirmed = true;
       } else await api(endpoint(id, item, 'start'), {});
@@ -116,6 +116,7 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
     } finally { if (epoch === generation) { busy.delete(id); pending.delete(id); renderApp(threadId === id); if (threadId === id) await refresh(); } }
   }
   async function submit(steer = false) {
+    if (handleCommand()) return;
     const epoch = generation;
     const state = getState(), id = threadId, text = $('message').value, turn = activeTurn(state);
     if ((steer ? $('steer') : $('send')).disabled || !text.trim()) return;
@@ -124,7 +125,7 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
     pending.set(id, item); renderApp(true);
     try {
       const queue = isWorking(state) && !steer;
-      const response = await api(`/api/threads/${encodeURIComponent(id)}/${queue ? 'queue' : 'message'}`, { text, ...(queue ? { clientId: item.id } : steer && turn ? { turnId: turn.id } : {}) });
+      const response = await api(`/api/threads/${encodeURIComponent(id)}/${queue ? 'queue' : 'message'}`, { text, skills: skillsFor(text), ...(queue ? { clientId: item.id } : steer && turn ? { turnId: turn.id } : {}) });
       if (epoch !== generation) return;
       item.confirmed = true;
       if (getDraft(id) === text) saveDraft(id, '');

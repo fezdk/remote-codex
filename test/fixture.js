@@ -20,7 +20,15 @@ export class FixtureCodex extends EventEmitter {
   async subscribe(id){this.subscriptions.add(id);return this.rpc('thread/resume',{threadId:id,excludeTurns:true});}
   async rpc(method,params={}){
     this.calls.push({method,params});
-    if(method==='thread/read')return{thread:this.threads.find(t=>t.id===params.threadId)};
+    if(method==='thread/read'){const thread=this.threads.find(t=>t.id===params.threadId);return{thread:thread&&{...thread,status:{type:params.threadId==='session-one'&&this.turns.some(turn=>turn.status==='inProgress')?'active':'idle'}}};}
+    if(method==='skills/list')return{data:params.cwds.map(cwd=>({cwd,errors:[],skills:[{name:'review',description:'Review project changes',path:'/workspace/demo-skills/review/SKILL.md',enabled:true},{name:'ui-polish',description:'Polish UI details',path:'/workspace/demo-skills/ui-polish/SKILL.md',enabled:true},{name:'disabled-skill',description:'Disabled',path:'/workspace/demo-skills/disabled/SKILL.md',enabled:false}]}))};
+    if(method==='account/rateLimits/read')return{rateLimits:{limitId:'codex',primary:{usedPercent:25,windowDurationMins:300,resetsAt:1900000000},secondary:null}};
+    if(method==='thread/name/set'){const thread=this.threads.find(t=>t.id===params.threadId);thread.name=params.name;this.event('thread/name/updated',{threadId:params.threadId,threadName:params.name});return{};}
+    if(method==='thread/compact/start'){
+      const turn={id:`compact-${this.sequence}`,startedAt:Date.now()/1000,status:'inProgress',items:[]};this.turns.push(turn);this.event('turn/started',{threadId:params.threadId,turn});
+      const item={id:`item-${turn.id}`,type:'contextCompaction'};turn.items.push(item);this.event('item/started',{threadId:params.threadId,turnId:turn.id,item});
+      setTimeout(()=>{this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item});this.complete(params.threadId,turn);this.event('thread/tokenUsage/updated',{threadId:params.threadId,turnId:turn.id,tokenUsage:{total:{totalTokens:4567,inputTokens:4000,cachedInputTokens:3000,outputTokens:567,reasoningOutputTokens:100},last:{totalTokens:345},modelContextWindow:128000}});},120);return{};
+    }
     if(method.startsWith('thread/queue/')) {
       const list=this.queues.get(params.threadId)||[];this.queues.set(params.threadId,list);
       const index=list.findIndex(item=>item.id===params.queuedSubmissionId);

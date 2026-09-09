@@ -1,6 +1,7 @@
 import { initProjects } from './projects.js';
 import { initChanges } from './changes.js';
 import { initQueue } from './queue.js';
+import { initSessionTools } from './session-tools.js';
 import { t, initPreferences, showError } from './i18n.js';
 import { createState, mergeTurns, activeTurn, isWorking, applyEvent, restoreHistory, title, project } from './state.js';
 
@@ -54,7 +55,7 @@ function showLogin() {
   clearTimeout(searchTimer); cancelAnimationFrame(renderFrame); renderFrame = null;
   defaultCwd = ''; nextCursor = null; turnsCursor = null;
   Object.assign(state, createState()); drafts.clear(); requestCards.clear(); draftId = null; bufferedEvents = []; requestSignature = '';
-  queue.reset(); changes.selectThread(null); projects.reset();
+  queue.reset(); changes.selectThread(null); projects.reset(); sessionTools.reset();
   $('message').value = ''; $('messages').replaceChildren(); $('requests').replaceChildren(); $('session-list').replaceChildren();
   $('notice').hidden = true; $('notice-text').textContent = ''; $('session-view').hidden = true; $('welcome').hidden = false;
   $('search').value = ''; setSidebar(false);
@@ -113,7 +114,7 @@ function connectEvents() {
   listen('codex', event => {
     const message = JSON.parse(event.data);
     if (state.loading) bufferedEvents.push(message);
-    applyEvent(state, message); changes.event(message); queue.event(message);
+    applyEvent(state, message); changes.event(message); queue.event(message); sessionTools.event(message);
     if (message.method === 'bridge/subscriptionError' && message.params.threadId === state.selectedId) notice(message.params.message);
     scheduleRender();
   });
@@ -130,6 +131,7 @@ async function resync() {
   if (epoch !== authEpoch) return;
   const target = state.selectedId || new URLSearchParams(location.hash.slice(1)).get('session');
   if (target) await openThread(target, true);
+  sessionTools.reconnect();
 }
 function ago(timestamp) {
   const minutes = Math.max(0, Math.floor((Date.now()/1000 - timestamp)/60));
@@ -179,7 +181,7 @@ async function openThread(id, resyncing = false) {
   history.replaceState(null, '', `#session=${encodeURIComponent(id)}`);
   if (!resyncing || state.thread?.id !== id) { state.turns = []; state.thread = state.threads.find(t => t.id === id) || { id }; }
   $('welcome').hidden = true; $('session-view').hidden = false;
-  changes.selectThread(id); queue.selectThread(id);
+  changes.selectThread(id); queue.selectThread(id); sessionTools.selectThread(id);
   setSidebar(false); renderAll();
   try {
     const response = await api(`/api/threads/${encodeURIComponent(id)}/open`, {});
@@ -250,8 +252,10 @@ function renderItem(item) {
     const label = el('div','message-label');
     label.append(el('span','avatar',user ? t('session.you').slice(0, 1) : '⌘'),document.createTextNode(user ? t('session.you') : 'Codex'));
     wrapper.append(label);
-    const text = user ? (item.content || []).map(c => c.text || (c.type === 'image' || c.type === 'localImage' ? t('session.image') : `[${c.type}]`)).join('\n') : item.text || '';
+    const text = user ? (item.content || []).filter(c => c.type !== 'skill').map(c => c.text || (c.type === 'image' || c.type === 'localImage' ? t('session.image') : `[${c.type}]`)).join('\n') : item.text || '';
     wrapper.append(user ? el('div','message-body',displayText(text)) : markdown(text));
+    const skills = user && (item.content || []).filter(c => c.type === 'skill').map(c => c.name);
+    if (skills?.length) wrapper.append(el('div', 'delivery-status', t('tools.selectedSkills', { names: skills.join(', ') })));
     for (const q of item.questions || []) {
       const card = el('div','request-card'); card.append(el('p','',q.title));
       const actions = el('div','request-actions');
@@ -321,6 +325,7 @@ function renderControls() {
   $('input-warning').textContent = t('session.noInput');
   $('send-mode').textContent = active ? t('session.steer') : t('session.defaults');
   queue.render();
+  sessionTools.render();
 }
 function renderRequests() {
   const pendingTokens = new Set([...state.requests.values()].map(request => request.requestToken));
@@ -419,13 +424,14 @@ $('older-turns').onclick=async()=>{
 $('new-session').onclick = () => projects.open();
 $('welcome-new').onclick = () => projects.open();
 $('message').oninput=()=>{drafts.set(state.selectedId,$('message').value);renderControls();};
-$('message').onkeydown=event=>{queue.keydown(event);if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('send').disabled)$('composer').requestSubmit();}};
+$('message').onkeydown=event=>{if(sessionTools.keydown(event))return;queue.keydown(event);if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('send').disabled)$('composer').requestSubmit();}};
 $('composer').onsubmit=event=>{event.preventDefault();queue.submit();};
 $('interrupt').onclick=async()=>{const turn=activeTurn(state);if(!turn)return;try{await api(`/api/threads/${encodeURIComponent(state.selectedId)}/interrupt`,{turnId:turn.id});}catch(error){notice(error);}};
 window.addEventListener('hashchange',()=>{const id=new URLSearchParams(location.hash.slice(1)).get('session');if(id&&id!==state.selectedId)openThread(id);});
 setInterval(()=>{if(state.connected&&!document.hidden&&!state.loading)loadThreads().catch(()=>{});},30000);
 const changes = initChanges({ api, getState: () => state });
-const queue = initQueue({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text) });
+const sessionTools = initSessionTools({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text) });
+const queue = initQueue({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text), skillsFor: sessionTools.skillsFor, handleCommand: sessionTools.submit });
 const projects = initProjects({ api, getDefaultCwd: () => state.thread?.cwd || defaultCwd, onCreated: async result => { await loadThreads().catch(notice); await openThread(result.thread.id); } });
 initPreferences(() => { renderConnection(); renderAll(); changes.render(); projects.render(); });
 enter().catch(()=>showLogin());

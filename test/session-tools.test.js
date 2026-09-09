@@ -1,0 +1,77 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { resolve } from 'node:path';
+import { commandOf, skillMentions } from '../public/input.js';
+import { createSessionTools } from '../server/session-tools.js';
+import { createWebServer } from '../server/http.js';
+import { FixtureCodex } from './fixture.js';
+
+test('recognizes commands only first, and skills anywhere except code, escapes, paths and ambiguous names', () => {
+  const skills = ['review', 'ui-polish', 'rename', 'model', 'duplicate', 'duplicate'].map(name => ({ name, path: `/demo/${name}` }));
+  assert.deepEqual(commandOf('  /rename My project'), { name: 'rename', argument: 'My project', start: 2, end: 9 });
+  assert.equal(commandOf('Please /compact later'), null);
+  assert.equal(commandOf('/compact/path'), null);
+  const text = 'Please /review, then $ui-polish. `/review` ```\n$review\n``` /review/file https://host/review \\/review /duplicate /rename /model $rename';
+  assert.deepEqual(skillMentions(text, skills).map(m => m.name), ['review', 'ui-polish', 'rename']);
+  assert.deepEqual(skillMentions('`unfinished /review', skills), []);
+  assert.deepEqual(skillMentions('(/review) /reviewer', skills).map(m => m.name), ['review']);
+});
+
+test('usage reports replace totals, survive resubscription, and remain stale through compaction until a new report', async () => {
+  const codex = new FixtureCodex(), tools = createSessionTools(codex);
+  const report = { threadId: 'session-one', turnId: 'turn', tokenUsage: { total: { totalTokens: 900, inputTokens: 700, cachedInputTokens: 600, outputTokens: 200 }, last: { totalTokens: 250 }, modelContextWindow: 128000 } };
+  assert.equal((await tools.status('session-one')).usage, null);
+  tools.event({ method: 'thread/tokenUsage/updated', params: report });
+  tools.event({ method: 'thread/tokenUsage/updated', params: report });
+  assert.equal((await tools.status('session-one')).usage.total.totalTokens, 900);
+  tools.connection({ state: 'disconnected' }); tools.connection({ state: 'connected' });
+  assert.equal((await tools.status('session-one')).usage.stale, 'disconnected');
+  for (const method of ['item/started', 'item/completed']) tools.event({ method, params: { threadId: 'session-one', item: { type: 'contextCompaction' } } });
+  assert.equal((await tools.status('session-one')).usage.stale, 'compaction');
+  report.tokenUsage.last.totalTokens = 100;
+  tools.event({ method: 'thread/tokenUsage/updated', params: report });
+  const status = await tools.status('session-one');
+  assert.equal(status.usage.stale, null); assert.equal(status.usage.last.totalTokens, 100); assert.equal(status.usage.total.totalTokens, 900);
+  assert.equal((await tools.status('session-two')).usage, null);
+  const original = codex.rpc.bind(codex); codex.rpc = (method, params) => method === 'account/rateLimits/read' ? Promise.reject(new Error('unsupported')) : original(method, params);
+  assert.equal((await tools.status('session-one')).limits, null);
+});
+
+test('authenticated commands are allowlisted and skills are resolved from the session catalog for messages, queue and steer', async t => {
+  const codex = new FixtureCodex();
+  const server = createWebServer({ codex, token: 'synthetic-command-test-key-only', publicDir: resolve('public') });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => { server.closeStreams(); server.closeAllConnections(); server.close(); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  for (const action of ['status', 'skills']) assert.equal((await fetch(`${base}/api/threads/session-one/${action}`)).status, 401);
+  const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: 'synthetic-command-test-key-only' }) });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const request = (action, data) => fetch(`${base}/api/threads/session-one/${action}`, { method: data === undefined ? 'GET' : 'POST', headers: { cookie, 'Content-Type': 'application/json' }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
+  assert.equal((await request('command', { command: 'rename', name: 'Demo' })).status, 409);
+  await request('open', {});
+  const count = codex.calls.length;
+  for (const data of [{ command: 'shell' }, { command: 'rename', name: 'line\nbreak' }, { command: 'rename', name: '' }]) assert.equal((await request('command', data)).status, 400);
+  assert.equal(codex.calls.length, count);
+  assert.equal((await request('command', { command: 'rename', name: 'A new title' })).status, 200);
+  assert.deepEqual(codex.calls.at(-1), { method: 'thread/name/set', params: { threadId: 'session-one', name: 'A new title' } });
+  assert.equal((await request('skills')).status, 200);
+  const available = await (await request('skills')).json(); assert.deepEqual(available.skills.map(s => s.name), ['review', 'ui-polish']);
+  assert.equal((await request('message', { text: 'Please /review', skills: ['disabled-skill'] })).status, 409);
+  assert.equal((await request('message', { text: 'Literal `/review`', skills: ['review'] })).status, 409);
+  assert.equal((await request('message', { text: 'Please /review', skills: [{ name: 'review', path: '/private/file' }] })).status, 400);
+  await request('message', { text: 'long' });
+  assert.equal((await request('command', { command: 'compact' })).status, 409);
+  const turnId = codex.turns.at(-1).id;
+  await request('message', { text: 'Please /review this', skills: ['review'], turnId });
+  assert.equal(codex.calls.at(-1).method, 'turn/steer');
+  assert.deepEqual(codex.calls.at(-1).params.input[1], { type: 'skill', name: 'review', path: '/workspace/demo-skills/review/SKILL.md' });
+  await request('queue', { text: 'Then $ui-polish', skills: ['ui-polish'], clientId: 'demo-queue' });
+  assert.equal(codex.calls.at(-1).method, 'thread/queue/add'); assert.equal(codex.calls.at(-1).params.input[1].name, 'ui-polish');
+  await request('queue/' + codex.queues.get('session-one')[0].id + '/delete', {});
+  await request('interrupt', { turnId });
+  assert.equal((await request('command', { command: 'compact' })).status, 200);
+  await new Promise(resolve => setTimeout(resolve, 160));
+  const status = await (await request('status')).json(); assert.equal(status.usage.total.totalTokens, 4567);
+  assert.equal(status.usage.stale, null);
+});

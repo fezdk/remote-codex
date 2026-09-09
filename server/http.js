@@ -2,6 +2,7 @@ import http from 'node:http';
 import { messages } from '../public/locales.js';
 import { codexChanges, gitChanges, gitFileDiff } from './changes.js';
 import { suggestProjects, prepareProject } from './projects.js';
+import { createSessionTools } from './session-tools.js';
 import { readFile } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { resolve, isAbsolute } from 'node:path';
@@ -9,7 +10,7 @@ import { networkInterfaces } from 'node:os';
 
 const cookieName = 'remote_codex_session';
 const mime = { '/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8', '/state.js': 'text/javascript; charset=utf-8', '/style.css': 'text/css; charset=utf-8', '/icon.svg': 'image/svg+xml' };
-for (const name of ['preferences.js', 'i18n.js', 'locales.js', 'changes.js', 'queue.js', 'projects.js']) mime[`/${name}`] = 'text/javascript; charset=utf-8';
+for (const name of ['preferences.js', 'i18n.js', 'locales.js', 'changes.js', 'queue.js', 'projects.js', 'input.js', 'session-tools.js']) mime[`/${name}`] = 'text/javascript; charset=utf-8';
 const idOK = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(value);
 const fail = (errorKey, status = 400) => Object.assign(new Error(messages.en[errorKey] || errorKey), { status, errorKey });
 const equal = (a, b) => timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
@@ -56,6 +57,7 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
   const sessions = new Map();
   const streams = new Map();
   const attempts = new Map();
+  const sessionTools = createSessionTools(codex);
   let eventId = 0;
   const sendEvent = (res, type, data) => {
     if (res.writableLength > 2 * 1024 * 1024) return res.destroy();
@@ -67,8 +69,8 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
       else sendEvent(res, type, data);
     }
   };
-  const onEvent = data => broadcast('codex', data);
-  const onStatus = data => broadcast('status', data);
+  const onEvent = data => { sessionTools.event(data); broadcast('codex', data); };
+  const onStatus = data => { sessionTools.connection(data); broadcast('status', data); };
   codex.on('event', onEvent);
   codex.on('status', onStatus);
   const server = http.createServer(async (req, res) => {
@@ -169,10 +171,17 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
         codex.subscriptions.add(result.thread.id);
         json(201, result); return;
       }
-      const match = path.match(/^\/api\/threads\/([^/]+)\/(open|turns|message|interrupt|changes|git|git-diff|queue)$/);
+      const match = path.match(/^\/api\/threads\/([^/]+)\/(open|turns|message|interrupt|changes|git|git-diff|queue|skills|status|command)$/);
       if (match) {
         const [, threadId, action] = match;
         if (!idOK(threadId)) throw fail('error.sessionId');
+        if (action === 'skills' && req.method === 'GET') { json(200, await sessionTools.skills(threadId, url.searchParams.get('refresh') === '1')); return; }
+        if (action === 'status' && req.method === 'GET') { json(200, await sessionTools.status(threadId)); return; }
+        if (action === 'command' && req.method === 'POST') {
+          const input = await body(req);
+          if (!codex.subscriptions.has(threadId)) throw fail('error.openSession', 409);
+          json(200, await sessionTools.command(threadId, input)); return;
+        }
         if (['changes', 'git', 'git-diff'].includes(action) && req.method === 'GET') {
           if (action === 'changes') { json(200, await codexChanges(codex, threadId)); return; }
           const upstream = codex.options?.url;
@@ -195,7 +204,7 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
           if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 100000) throw fail('error.message');
           if (!codex.subscriptions.has(threadId)) throw fail('error.openSession', 409);
           if (!idOK(input.clientId)) throw fail('error.message');
-          json(200, await codex.rpc('thread/queue/add', { threadId, clientUserMessageId: input.clientId, input: [{ type: 'text', text: input.text, text_elements: [] }] })); return;
+          json(200, await codex.rpc('thread/queue/add', { threadId, clientUserMessageId: input.clientId, input: await sessionTools.input(threadId, input) })); return;
         }
         if (action === 'open' && req.method === 'POST') { json(200, await codex.subscribe(threadId)); return; }
         if (action === 'turns' && req.method === 'GET') {
@@ -205,7 +214,7 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
           const input = await body(req);
           if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 100000) throw fail('error.message');
           if (!codex.subscriptions.has(threadId)) throw fail('error.openSession', 409);
-          const params = { threadId, input: [{ type: 'text', text: input.text, text_elements: [] }] };
+          const params = { threadId, input: await sessionTools.input(threadId, input) };
           if (input.turnId != null) {
             if (!idOK(input.turnId)) throw fail('error.turnId');
             params.expectedTurnId = input.turnId;

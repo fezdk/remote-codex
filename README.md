@@ -104,6 +104,8 @@ This service runs only the web server. The Codex daemon must have its own startu
 - Separate **Codex** and **Git** changes tabs, a file list, colored diffs, and a draggable divider on desktop.
 - Danish and English UI translations, light and dark themes, and green/red connection status.
 - An activity indicator next to the message field, visible even when the conversation is scrolled up.
+- Session commands (`/rename`, `/compact`, `/status`, `/help`) and a **Session** menu.
+- Project-scoped skill discovery, inline highlighting, and explicit skill attachments with `$skill-name` or `/skill-name`.
 - Automatic reconnection, history resynchronization, and restored subscriptions. Submitted actions are never replayed automatically.
 - Mobile navigation and session links in the URL fragment. Drafts survive switching sessions within the same page, but not a page reload.
 
@@ -136,6 +138,35 @@ Replacing an unsent draft retains its text in a recovery card. **Restore message
 Steering instructions appear immediately in the conversation with a sending indicator. After acceptance, the text stays visible until Codex records the matching message in its conversation history. This also applies when converting a queued message to a steer. Multiple pending steers remain visible across session switches and are reconciled individually, including identical text. Arrow Up can recall an accepted steer while its history event is still pending. These temporary display entries live only in the current page and are cleared by reload or logout; they do not change or replay Codex messages.
 
 Drafts and text removed from the queue are kept only in the current browser page. Reloading the page discards them; messages still in Codex's queue are retained by Codex.
+
+## Session commands and skills
+
+Commands are recognized at the beginning of the message, after optional whitespace. They execute separately from chat and never enter the message queue. The **Session** button exposes the same actions without typing a command.
+
+| Command | Behavior |
+| --- | --- |
+| `/rename New name` | Saves the session's name in Codex. `/rename` alone opens a name form. |
+| `/compact` | Starts Codex context compaction. Wait until the session is idle; this never interrupts an active turn. Progress appears in the conversation. |
+| `/status` | Shows the model, reasoning effort, runtime state, reported tokens, and available account rate limits. |
+| `/help` | Opens the session actions and discovered skill list. |
+
+`/compact`, `/status`, and `/help` take no arguments. Management commands mentioned in ordinary prose are plain text. Unknown commands are also plain text; `/model` is not implemented.
+
+The composer discovers enabled skills through `skills/list`, scoped to the selected session's project directory. Type `$skill-name` or `/skill-name` anywhere in a normal message to explicitly select a discovered skill. Recognized references are highlighted in the input, and matching suggestions can be inserted by clicking or pressing Tab. Bare names remain ordinary text, allowing Codex's own implicit skill selection to work. Escaped markers, backtick code, URLs, and file paths are not treated as explicit references. Duplicate skill names are not automatically resolved.
+
+For example, `Please /review these changes, then use $ui-polish` selects those two skills **if they are present in that project's catalog**. `/review` is a skill alias here, not an invocation of the separate native `review/start` endpoint. The slash aliases `/rename`, `/compact`, `/status`, `/help`, and `/model` are reserved for management commands; use `$name` to reference a skill with one of those names.
+
+The bridge revalidates selected skill names against the current project catalog before forwarding a message, queue entry, or steer. It uses the server-discovered skill paths and sends native `skill` input items alongside the original text; client-supplied paths are not accepted. Queued skill attachments survive editing and conversion to steering instructions. A missing, disabled, or ambiguous selected skill produces an error rather than silently sending a message without the selected skill. Use **Session → Refresh skills** after installing a skill; `skills/changed` notifications also trigger rediscovery. If discovery is unsupported, normal text messages still work.
+
+### Token status and its limits
+
+Token information comes from `thread/tokenUsage/updated`, not from counting words or reconstructing the transcript. Each report replaces the previous cumulative snapshot for that thread; repeated reports are not added together. Cached input and reasoning output are displayed as breakdowns, not added again to the total.
+
+The bridge keeps the latest reports for up to 500 threads in memory, so reopening the browser can show already-observed data. A bridge restart clears this cache. The inspected `thread/read` and `thread/resume` protocol responses do not include a token snapshot, so a session with no observed report shows **Waiting for token data** until Codex sends one. This is not an independent billing ledger, and the bridge does not scan private transcript files to fill gaps.
+
+Disconnections, context compaction, and session settings changes mark cached figures as last-known data until a fresh usage report arrives. Status includes the report timestamp and a manual refresh button. The latest reported token count and model context window are shown separately; no exact current-context percentage is inferred, especially after compaction. Account limit percentages are the server's reported quota usage and are separate from context usage. Unavailable fields and unsupported rate-limit calls are shown explicitly.
+
+See the official [App Server skills protocol](https://learn.chatgpt.com/docs/app-server#skills) and [event documentation](https://learn.chatgpt.com/docs/app-server#events).
 
 ## Reviewing file changes
 
@@ -239,6 +270,8 @@ public/                 HTML, CSS, and browser JavaScript modules
   app.js                Session navigation, conversations, and approvals
   state.js              History and live-event reduction
   queue.js              Queued messages, editing, and resubmission
+  input.js              Shared command and skill-reference recognition
+  session-tools.js      Session commands, token status, and skill highlighting
   changes.js            Changes panel, diffs, and resizing
   projects.js           Directory suggestions and new-session dialog
   locales.js            Translation dictionaries
@@ -251,6 +284,7 @@ server/
   codex.js              Connection to the existing Codex daemon
   changes.js            Codex change summaries and read-only Git operations
   projects.js           Directory lookup, validation, and explicit creation
+  session-tools.js      Validated session actions, skill resolution, and token snapshots
 test/                   Unit, integration, and browser tests
 scripts/                Reproducible README screenshot capture
 docs/                   Code audit, architecture research, references, and demo screenshots

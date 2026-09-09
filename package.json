@@ -13,7 +13,7 @@
     "test": "node --test test/*.test.js",
     "test:browser": "playwright test",
     "screenshots": "node scripts/readme-screenshots.mjs",
-    "check": "node --check server/index.js && node --check server/credential-store.js && node --check server/codex.js && node --check server/http.js && node --check server/changes.js && node --check public/app.js && node --check public/state.js && node --check public/locales.js && node --check public/preferences.js && node --check public/i18n.js && node --check public/changes.js && node --check public/queue.js && node --check server/projects.js && node --check public/projects.js"
+    "check": "node --check server/index.js && node --check server/credential-store.js && node --check server/codex.js && node --check server/http.js && node --check server/changes.js && node --check public/app.js && node --check public/state.js && node --check public/locales.js && node --check public/preferences.js && node --check public/i18n.js && node --check public/changes.js && node --check public/queue.js && node --check server/projects.js && node --check public/projects.js && node --check public/input.js && node --check public/session-tools.js && node --check server/session-tools.js"
   },
   "dependencies": {
     "ws": "^8.18.0"

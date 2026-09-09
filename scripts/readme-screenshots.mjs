@@ -60,7 +60,7 @@ const turns = [{ id: 'demo001', status: 'inProgress', startedAt: now / 1000 - 12
 const queue = [{ id: 'demo-queued', input: [{ type: 'text', text: 'Then add an empty state for projects with no activity.' }] }];
 const staticFiles = new Map([
   ['/', ['index.html', 'text/html']],
-  ...['app.js', 'changes.js', 'state.js', 'queue.js', 'projects.js', 'preferences.js', 'i18n.js', 'locales.js'].map(name => [`/${name}`, [name, 'text/javascript']]),
+  ...['app.js', 'changes.js', 'state.js', 'queue.js', 'projects.js', 'preferences.js', 'i18n.js', 'locales.js', 'input.js', 'session-tools.js'].map(name => [`/${name}`, [name, 'text/javascript']]),
   ['/style.css', ['style.css', 'text/css']], ['/icon.svg', ['icon.svg', 'image/svg+xml']],
 ]);
 const problems = [];
@@ -77,6 +77,7 @@ const server = createServer(async (req, res) => {
     }
     if (path === '/api/status') return json(status);
     if (path === '/api/threads') return json({ data: threads, nextCursor: null });
+    if (path === '/api/threads/atlas/skills') return json({ skills: [], incomplete: false });
     if (path === '/api/threads/atlas/open') return json({ thread: threads[0] });
     if (path === '/api/threads/atlas/turns') return json({ data: turns, nextCursor: null, bridgeSequence: 0 });
     if (path === '/api/threads/atlas/queue') return json({ data: queue, nextCursor: null });
