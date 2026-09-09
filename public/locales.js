@@ -2,6 +2,7 @@
 export const languages = { da: 'Dansk', en: 'English' };
 export const messages = {
   da: {
+    'session.table': 'Tabel (kan scrolles vandret)',
     "tools.menu": "Session",
     "tools.suggestions": "Skills og kommandoer",
     "tools.command.rename": "Omdøb sessionen",
@@ -272,6 +273,7 @@ export const messages = {
     'error.noPending': 'Anmodningen afventer ikke længere svar. Den kan være besvaret i en anden klient.',
   },
   en: {
+    'session.table': 'Table (scroll horizontally)',
     "tools.menu": "Session",
     "tools.suggestions": "Skills and commands",
     "tools.command.rename": "Rename the session",

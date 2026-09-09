@@ -234,10 +234,64 @@ function inline(node, text) {
   }
   node.append(document.createTextNode(text.slice(start)));
 }
+function tableRow(line) {
+  const cells = []; let value = '', code = 0, pipes = 0;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '\\' && ['|', '\\', '`'].includes(line[i + 1])) {
+      value += line[i + 1] === '|' ? '|' : char + line[i + 1]; i++; continue;
+    }
+    if (char === '`') {
+      let end = i + 1; while (line[end] === '`') end++;
+      const count = end - i;
+      if (!code) code = count; else if (code === count) code = 0;
+      value += line.slice(i, end); i = end - 1; continue;
+    }
+    if (char === '|' && !code) { cells.push(value.trim()); value = ''; pipes++; }
+    else value += char;
+  }
+  cells.push(value.trim());
+  if (pipes && cells[0] === '') cells.shift();
+  if (pipes && cells.at(-1) === '') cells.pop();
+  return { cells, pipes };
+}
+function markdownTables(node, text, budget) {
+  const lines = text.split('\n'), pending = [];
+  const flush = () => { if (pending.length) { inline(node, pending.join('')); pending.length = 0; } };
+  for (let i = 0; i < lines.length;) {
+    const header = tableRow(lines[i]), separator = i + 1 < lines.length ? tableRow(lines[i + 1]) : null;
+    const count = header.cells.length;
+    if (!header.pipes || !count || count > 100 || count > budget.cells || separator?.cells.length !== count || !separator.cells.every(cell => /^:?-+:?$/.test(cell))) {
+      pending.push(lines[i] + (i + 1 < lines.length ? '\n' : '')); i++; continue;
+    }
+    flush();
+    const wrapper = el('div', 'markdown-table'), table = el('table'), head = el('thead'), body = el('tbody');
+    wrapper.tabIndex = 0; wrapper.setAttribute('role', 'region'); wrapper.setAttribute('aria-label', t('session.table'));
+    const alignments = separator.cells.map(cell => cell.endsWith(':') ? cell.startsWith(':') ? 'center' : 'right' : 'left');
+    const row = (values, heading = false) => {
+      const tr = el('tr');
+      for (let col = 0; col < count; col++) {
+        const cell = el(heading ? 'th' : 'td', `align-${alignments[col]}`);
+        if (heading) cell.scope = 'col';
+        inline(cell, values[col] || ''); tr.append(cell);
+      }
+      budget.cells -= count; return tr;
+    };
+    head.append(row(header.cells, true)); i += 2;
+    while (i < lines.length && lines[i].trim() && budget.cells >= count) {
+      const next = tableRow(lines[i]);
+      if (!next.pipes) break;
+      body.append(row(next.cells)); i++;
+    }
+    table.append(head, body); wrapper.append(table); node.append(wrapper);
+  }
+  flush();
+}
 function markdown(text) {
   const node = el('div','message-body');
+  const budget = { cells: 5000 };
   const parts = displayText(text).split(/```[^\n`]*\n([\s\S]*?)(?:```|$)/g);
-  parts.forEach((part,index) => { if (index % 2) { const pre = el('pre'); pre.append(el('code','',part)); node.append(pre); } else inline(node,part); });
+  parts.forEach((part,index) => { if (index % 2) { const pre = el('pre'); pre.append(el('code','',part)); node.append(pre); } else markdownTables(node,part,budget); });
   return node;
 }
 function displayText(text) {

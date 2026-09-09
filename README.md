@@ -95,7 +95,7 @@ This service runs only the web server. The Codex daemon must have its own startu
 
 - Searchable, paginated session list with project paths and activity status.
 - Existing active and saved sessions through `thread/resume`, without configuration overrides.
-- Conversation history, streamed responses, code blocks, command output, file changes, and agent activity.
+- Conversation history, streamed responses, code blocks, Markdown tables, command output, file changes, and agent activity. Tables support column alignment and inline formatting, with horizontal scrolling on narrow screens.
 - New sessions with project directory suggestions, path validation, and optional directory creation.
 - Persistent Codex message queue with editing, cancellation, and conversion to a steering instruction.
 - Direct steering of an active turn, and interruption of the current turn.
