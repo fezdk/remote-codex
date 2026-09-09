@@ -106,8 +106,21 @@ This service runs only the web server. The Codex daemon must have its own startu
 - An activity indicator next to the message field, visible even when the conversation is scrolled up.
 - Session commands (`/rename`, `/compact`, `/status`, `/help`) and a **Session** menu.
 - Project-scoped skill discovery, inline highlighting, and explicit skill attachments with `$skill-name` or `/skill-name`.
+- Model and reasoning-effort selectors in the composer, populated from the connected Codex server's model catalog.
 - Automatic reconnection, history resynchronization, and restored subscriptions. Submitted actions are never replayed automatically.
 - Mobile navigation and session links in the URL fragment. Drafts survive switching sessions within the same page, but not a page reload.
+
+## Choosing a model and effort
+
+The selectors below the message field replace the fixed model label. Their options come from the connected Codex server's `model/list` response, including that model's supported reasoning efforts. This uses the daemon's existing account and provider configuration; it does not require a separate API key or fetch a generic OpenAI model list.
+
+Selecting a model or effort immediately updates **that session's settings for subsequent turns** through `thread/settings/update`. It does not change global Codex configuration, permissions, or another session. An active response and steering instructions retain their current turn settings; the composer shows a reminder while Codex is working. Subsequent queued turns use the updated session settings.
+
+When switching models, the current effort is retained if the new model supports it. Otherwise the picker uses the new model's catalog default, falling back to its first supported effort if the catalog has no valid default. The effort selector only offers levels that the selected model supports. An unset effort is displayed as a default rather than silently written back to the server. A current model outside the picker catalog remains visible and is never automatically replaced.
+
+Drafts are preserved while settings save. Sending from this browser waits for the update to finish. Live settings notifications synchronize changes made by other clients; late acknowledgements do not overwrite newer observed settings. Failed or uncertain writes are not replayed, and the picker attempts to reread the session settings. If model discovery fails, the current settings remain visible and the refresh button retries discovery. Normal messages can still use the session's existing settings.
+
+The model catalog and available efforts are version-, provider-, and account-dependent. The bridge validates selections against the current catalog, and Codex can still reject a change due to session constraints. See the official [model catalog documentation](https://learn.chatgpt.com/docs/app-server#models).
 
 ## Choosing a project directory
 
@@ -272,6 +285,7 @@ public/                 HTML, CSS, and browser JavaScript modules
   queue.js              Queued messages, editing, and resubmission
   input.js              Shared command and skill-reference recognition
   session-tools.js      Session commands, token status, and skill highlighting
+  models.js             Model and reasoning-effort selection for each session
   changes.js            Changes panel, diffs, and resizing
   projects.js           Directory suggestions and new-session dialog
   locales.js            Translation dictionaries

@@ -96,6 +96,12 @@ export function applyEvent(state, message) {
     if (thread) thread.name = p.threadName;
     if (state.thread?.id === p.threadId) state.thread.name = p.threadName;
   }
+  if (message.method === 'thread/settings/updated' && p.threadSettings) {
+    const update = { model: p.threadSettings.model, reasoningEffort: p.threadSettings.effort };
+    const thread = state.threads.find(t => t.id === p.threadId);
+    if (thread) Object.assign(thread, update);
+    if (state.thread?.id === p.threadId) Object.assign(state.thread, update);
+  }
   if (['turn/completed','thread/closed'].includes(message.method)) {
     for (const [key, request] of state.requests) {
       if (request.params?.threadId === p.threadId && (!p.turn || request.params.turnId === p.turn.id)) state.requests.delete(key);

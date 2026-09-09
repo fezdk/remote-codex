@@ -205,7 +205,7 @@ export function initSessionTools({ api, getState, notice, renderApp, getDraft, s
     reset() { this.selectThread(null); mirror.replaceChildren(); $('input-suggestions').replaceChildren(); $('tools-content').replaceChildren(); $('session-name').value = ''; },
     event(message) {
       if (message.method === 'skills/changed') discover(true);
-      if (dialog.open && view === 'status' && message.params?.threadId === id && ['thread/tokenUsage/updated', 'turn/completed', 'item/completed', 'thread/name/updated'].includes(message.method)) {
+      if (dialog.open && view === 'status' && message.params?.threadId === id && ['thread/tokenUsage/updated', 'turn/completed', 'item/completed', 'thread/name/updated', 'thread/settings/updated'].includes(message.method)) {
         clearTimeout(refreshTimer); refreshTimer = setTimeout(refreshStatus, 600);
       }
     },

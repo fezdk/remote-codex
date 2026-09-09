@@ -36,6 +36,35 @@ export function createSessionTools(codex) {
     // Expose metadata only, never skill bodies, dependency configuration, or filesystem errors.
     return { skills: entries.flatMap(entry => entry.skills).filter(skill => skill.enabled && typeof skill.name === 'string' && typeof skill.path === 'string').map(skill => ({ name: skill.name, path: skill.path, description: skill.interface?.shortDescription || skill.shortDescription || skill.description || '' })), incomplete: entries.some(entry => entry.errors?.length) };
   }
+  async function models() {
+    const entries = new Map(), seen = new Set(); let cursor;
+    do {
+      if (seen.size >= 10 || seen.has(cursor)) throw invalid('models.pagination', 502);
+      seen.add(cursor);
+      const page = await codex.rpc('model/list', { limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}) });
+      for (const model of page.data) {
+        if (model.hidden || typeof model.model !== 'string' || !model.model) continue;
+        const efforts = [...new Map((model.supportedReasoningEfforts || []).filter(option => typeof option.reasoningEffort === 'string').map(option => [option.reasoningEffort, { effort: option.reasoningEffort, description: option.description || '' }])).values()];
+        entries.set(model.model, { model: model.model, name: model.displayName || model.model, description: model.description || '', efforts, defaultEffort: model.defaultReasoningEffort || null });
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    return { models: [...entries.values()] };
+  }
+  async function settings(id, value) {
+    if (typeof value.model !== 'string' || !value.model || value.model.length > 200 || value.effort !== undefined && (typeof value.effort !== 'string' || value.effort.length > 30)) throw invalid('models.invalid');
+    const catalog = await models(), model = catalog.models.find(model => model.model === value.model);
+    if (!model || value.effort !== undefined && !model.efforts.some(option => option.effort === value.effort)) throw invalid('models.unavailable', 409);
+    // Only these two settings can be changed here. Never forward permissions or global config.
+    const params = { threadId: id, model: value.model, ...(value.effort !== undefined ? { effort: value.effort } : {}) };
+    await codex.rpc('thread/settings/update', params);
+    stale(id, 'settings');
+    return readSettings(id);
+  }
+  async function readSettings(id) {
+    const current = await thread(id);
+    return { model: current.model, reasoningEffort: current.reasoningEffort };
+  }
   async function input(id, value) {
     const parts = [{ type: 'text', text: value.text, text_elements: [] }];
     if (value.skills === undefined || Array.isArray(value.skills) && !value.skills.length) return parts;
@@ -75,5 +104,5 @@ export function createSessionTools(codex) {
     }
     throw invalid('tools.unknownCommand');
   }
-  return { event, connection, skills, input, status, command };
+  return { event, connection, skills, input, status, command, models, settings, readSettings };
 }

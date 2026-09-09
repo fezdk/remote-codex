@@ -6,7 +6,7 @@ const textOnly = item => item.input?.some(part => part.type === 'text') && item.
 const node = (tag, cls, text) => { const el = document.createElement(tag); el.className = cls; if (text != null) el.textContent = text; return el; };
 const clientId = () => [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, '0')).join('');
 
-export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraft, skillsFor = () => [], handleCommand = () => false }) {
+export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraft, skillsFor = () => [], handleCommand = () => false, isSettingsBusy = () => false }) {
   let threadId, items = [], revision = 0, generation = 0, failure, more = false, timer;
   const pending = new Map(), failed = new Map(), editing = new Map(), busy = new Set();
   const steers = createSteerTracker();
@@ -29,7 +29,7 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
     const state = getState(), active = activeTurn(state), working = isWorking(state), submission = pending.get(threadId);
     const flight = submission?.received || submission?.steer ? null : submission;
     const fragment = document.createDocumentFragment();
-    const disabled = !state.connected || !state.ready || Boolean(submission) || busy.has(threadId) || state.thread?.canAcceptDirectInput === false;
+    const disabled = !state.connected || !state.ready || Boolean(submission) || busy.has(threadId) || isSettingsBusy() || state.thread?.canAcceptDirectInput === false;
     function card(item, status, actions) {
       const row = node('div', 'queued-message'); row.dataset.queueId = item.id;
       row.append(node('div', 'queue-status', status), node('p', 'queue-text', textOf(item)));
@@ -146,7 +146,7 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
   }
   $('steer').onclick = () => submit(true);
   $('done-editing').onclick = () => { const prior = editing.get(threadId)?.prior || ''; draft(prior, 'resubmit'); };
-  return { render, refresh, submit, messages() { steers.reconcile(threadId, getState().turns); return steers.list(threadId); }, restoreDraft(text) { draft(text, 'resubmit'); }, reset() { ++generation; clearTimeout(timer); pending.clear(); steers.reset(); failed.clear(); editing.clear(); busy.clear(); failure = null; more = false; items = []; threadId = null; ++revision; render(); }, selectThread(id) { if (id !== threadId) { threadId = id; items = []; failure = null; more = false; ++revision; } render(); }, event(message) {
+  return { render, refresh, submit, isBusy: () => pending.has(threadId) || busy.has(threadId), messages() { steers.reconcile(threadId, getState().turns); return steers.list(threadId); }, restoreDraft(text) { draft(text, 'resubmit'); }, reset() { ++generation; clearTimeout(timer); pending.clear(); steers.reset(); failed.clear(); editing.clear(); busy.clear(); failure = null; more = false; items = []; threadId = null; ++revision; render(); }, selectThread(id) { if (id !== threadId) { threadId = id; items = []; failure = null; more = false; ++revision; } render(); }, event(message) {
     const id = message.params?.threadId;
     const edit = editing.get(id);
     if (edit && (message.method === 'turn/started' && message.params.turn.id !== edit.turnId || message.method === 'thread/status/changed' && message.params.status.type === 'active' && !edit.working)) editing.delete(id);
