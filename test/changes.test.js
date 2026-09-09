@@ -36,3 +36,43 @@ test('Git panel reads staged, unstaged, renamed, literal filenames and untracked
   await assert.rejects(gitFileDiff(cwd, '../etc/passwd'), { errorKey: 'changes.fileGone' });
   assert.equal(git('status', '--porcelain=v1', '-z'), before);
 });
+
+test('Git reads disable clean/process filters and ignore inherited repository overrides', async t => {
+  const cwd = await mkdtemp(join(tmpdir(), 'remote-codex-filters-')); t.after(() => rm(cwd, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
+  git('init', '-q');
+  await writeFile(join(cwd, 'tracked'), 'old\n'); git('add', 'tracked');
+  await writeFile(join(cwd, '.gitattributes'), 'tracked filter=probe\n');
+  git('config', 'filter.probe.clean', 'touch filter-executed; cat');
+  git('config', 'filter.probe.required', 'true');
+  await writeFile(join(cwd, 'tracked'), 'new\n');
+  // The original implementation runs the clean command during this read.
+  const result = await gitFileDiff(cwd, 'tracked');
+  assert.match(result.sections.find(section => section.key === 'changes.unstaged').diff, /\+new/);
+  const { access } = await import('node:fs/promises');
+  await assert.rejects(access(join(cwd, 'filter-executed')), { code: 'ENOENT' });
+  git('config', 'filter.probe.process', 'touch process-executed; exit 1');
+  await gitFileDiff(cwd, 'tracked');
+  await assert.rejects(access(join(cwd, 'process-executed')), { code: 'ENOENT' });
+  const previous = process.env.GIT_DIR;
+  try { process.env.GIT_DIR = join(cwd, 'does-not-exist'); assert.ok((await gitChanges(cwd)).files.some(file => file.path === 'tracked')); }
+  finally { if (previous === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = previous; }
+});
+
+test('parent Git inspection does not execute filters from a nested submodule', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'remote-codex-submodules-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, stdio: 'pipe' });
+  git(root, 'init', '-q', 'source'); const source = join(root, 'source');
+  await writeFile(join(source, 'tracked'), 'old\n'); git(source, 'add', '.');
+  git(source, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture');
+  git(root, 'init', '-q', 'parent'); const parent = join(root, 'parent');
+  git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'child');
+  const child = join(parent, 'child');
+  await writeFile(join(child, '.gitattributes'), 'tracked filter=probe\n');
+  git(child, 'config', 'filter.probe.clean', 'touch filter-executed; cat');
+  await writeFile(join(child, 'tracked'), 'new\n');
+  await gitChanges(parent);
+  assert.ok((await gitFileDiff(parent, 'child')).sections.some(section => section.diff.includes('Subproject commit')));
+  const { access } = await import('node:fs/promises');
+  await assert.rejects(access(join(child, 'filter-executed')), { code: 'ENOENT' });
+});

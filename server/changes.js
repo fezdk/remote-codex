@@ -65,9 +65,16 @@ export async function codexChanges(codex, threadId) {
 
 async function git(cwd, args, allowTruncated = false) {
   try {
-    const { stdout } = await exec('git', ['--no-optional-locks', '--literal-pathspecs', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', ...args], {
-      cwd, timeout: 10000, maxBuffer: MAX_BYTES, encoding: 'utf8', env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' },
-    });
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+    Object.assign(env, { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' });
+    const options = { cwd, timeout: 10000, maxBuffer: MAX_BYTES, encoding: 'utf8', env };
+    const base = ['--no-pager', '--no-optional-locks', '--literal-pathspecs', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.quotePath=false', '-c', 'diff.submodule=short', '-c', 'status.submoduleSummary=false'];
+    // --no-ext-diff/--no-textconv do not disable clean/process filters: even status can execute them.
+    let keys = '';
+    try { keys = (await exec('git', [...base, 'config', '--null', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|process|required)$'], options)).stdout; }
+    catch (cause) { if (cause.code !== 1) throw cause; }
+    const filters = [...new Set(keys.split('\0').filter(Boolean))].flatMap(key => ['-c', `${key}=${key.endsWith('.required') ? 'false' : ''}`]);
+    const { stdout } = await exec('git', [...base, ...filters, ...args], options);
     return { text: stdout, truncated: false };
   } catch (cause) {
     if (allowTruncated && cause.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return { text: cause.stdout || '', truncated: true };
@@ -92,7 +99,8 @@ export function parseGitStatus(text) {
 export async function gitChanges(cwd) {
   const { text } = await git(cwd, ['rev-parse', '--show-toplevel']);
   const root = text.trimEnd();
-  const status = await git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  // Nested repositories have their own filter configuration. Inspect gitlink commits, not their worktrees.
+  const status = await git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=dirty']);
   return { root, files: parseGitStatus(status.text) };
 }
 
@@ -104,12 +112,15 @@ export async function gitFileDiff(cwd, path) {
     const target = resolve(status.root, path);
     const rel = relative(status.root, target);
     if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw error('changes.fileGone', 'Invalid file path.');
-    const stat = await lstat(target);
-    if (!stat.isFile() || stat.isSymbolicLink()) return { sections: [], note: 'changes.nonText' };
+    const before = await lstat(target);
+    if (!before.isFile() || before.isSymbolicLink()) return { sections: [], note: 'changes.nonText' };
     const actual = await realpath(target), actualRoot = await realpath(status.root);
-    if (!actual.startsWith(`${actualRoot}${sep}`)) throw error('changes.fileGone', 'File is outside the repository.');
-    const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+    const actualRelative = relative(actualRoot, actual);
+    if (actualRelative === '..' || actualRelative.startsWith(`..${sep}`) || isAbsolute(actualRelative)) throw error('changes.fileGone', 'File is outside the repository.');
+    const handle = await open(actual, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
     try {
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.dev !== before.dev || stat.ino !== before.ino) throw error('changes.fileGone', 'File changed while opening it.', 409);
       const buffer = Buffer.alloc(Math.min(stat.size, MAX_BYTES));
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
       const content = buffer.subarray(0, bytesRead);
@@ -119,8 +130,8 @@ export async function gitFileDiff(cwd, path) {
   }
   const paths = [...new Set([file.path, file.previousPath].filter(Boolean))];
   const [staged, worktree] = await Promise.all([
-    git(status.root, ['diff', '--no-ext-diff', '--no-textconv', '--cached', '--', ...paths], true),
-    git(status.root, ['diff', '--no-ext-diff', '--no-textconv', '--', ...paths], true),
+    git(status.root, ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--cached', '--', ...paths], true),
+    git(status.root, ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--', ...paths], true),
   ]);
   return { sections: [{ key: 'changes.staged', diff: staged.text }, { key: 'changes.unstaged', diff: worktree.text }].filter(section => section.diff), truncated: staged.truncated || worktree.truncated, ...(!staged.text && !worktree.text ? { note: 'changes.noTextDiff' } : {}) };
 }

@@ -94,15 +94,21 @@ export function initChanges({ api, getState }) {
       if (detail?.error) fragment.append(node('p', 'error', errorText(detail.error)));
       if (detail?.note) fragment.append(node('p', 'change-note', t(detail.note)));
       if (detail?.truncated) fragment.append(node('p', 'change-note', t('changes.truncated')));
+      let linesLeft = 5000, charsLeft = 200000, limited = false;
       for (const section of sections) {
+        if (!linesLeft || !charsLeft) { limited = true; break; }
         fragment.append(node('h3', '', section.title || t(section.key)));
         const block = node('div', 'diff-block'), pre = node('pre', '');
-        for (const line of section.diff.split('\n')) {
+        if (section.diff.length > charsLeft) limited = true;
+        for (const line of section.diff.slice(0, charsLeft).split('\n')) {
+          if (!linesLeft--) { linesLeft = 0; limited = true; break; }
+          charsLeft = Math.max(0, charsLeft - line.length - 1);
           const kind = line.startsWith('@@') ? 'hunk' : line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'remove' : '';
           pre.append(node('span', `diff-line ${kind}`, line));
         }
         block.append(pre); fragment.append(block);
       }
+      if (limited) fragment.append(node('p', 'change-note', t('changes.truncated')));
     }
     const scroll = $('changes-content').scrollTop;
     $('change-detail').replaceChildren(fragment);

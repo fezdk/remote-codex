@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
+import { randomBytes } from 'node:crypto';
 import { messages } from '../public/locales.js';
 const bridgeError = errorKey => Object.assign(new Error(messages.en[errorKey]), { errorKey });
 
 export class CodexClient extends EventEmitter {
-  constructor({ socketPath, url, token, timeout = 30000 }) {
+  constructor({ socketPath, url, token, timeout = 30000, heartbeatMs = 15000 }) {
     super();
     this.options = { socketPath, url, token, timeout };
     this.pending = new Map();
@@ -15,6 +16,7 @@ export class CodexClient extends EventEmitter {
     this.state = 'disconnected';
     this.stopped = false;
     this.retry = 0;
+    this.heartbeatMs = heartbeatMs;
   }
 
   status() {
@@ -30,25 +32,34 @@ export class CodexClient extends EventEmitter {
     const headers = url ? {} : { Host: 'localhost' };
     if (token) headers.Authorization = `Bearer ${token}`;
     const ws = this.ws = new WebSocket(endpoint, { headers, perMessageDeflate: false, handshakeTimeout: 10000, maxPayload: 64 * 1024 * 1024 });
+    let alive = true;
+    ws.on('pong', () => { alive = true; });
     ws.on('message', bytes => {
       try { this.receive(JSON.parse(bytes.toString())); }
       catch { this.lastError = 'Codex returned an invalid protocol message.'; }
     });
     ws.on('error', error => { this.lastError = error.message; });
     ws.on('open', async () => {
+      this.heartbeat = setInterval(() => {
+        if (!alive) { ws.terminate(); return; }
+        alive = false; ws.ping();
+      }, this.heartbeatMs);
+      this.heartbeat.unref();
       try {
         this.info = await this.rpc('initialize', {
           clientInfo: { name: 'remote_codex_web', title: 'Remote Codex', version: '0.1.0' },
           capabilities: { experimentalApi: true },
         }, true);
         this.send({ method: 'initialized', params: {} });
-        this.state = 'connected';
         this.lastError = null;
         this.retry = 0;
         for (const threadId of this.subscriptions) {
-          try { await this.rpc('thread/resume', { threadId, excludeTurns: true }); }
+          if (this.stopped || this.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+          try { await this.rpc('thread/resume', { threadId, excludeTurns: true }, true); }
           catch (error) { this.emit('event', { method: 'bridge/subscriptionError', params: { threadId, message: error.message } }); }
         }
+        if (this.stopped || this.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+        this.state = 'connected';
         this.emit('status', this.status());
       } catch (error) {
         this.lastError = error.message;
@@ -56,6 +67,7 @@ export class CodexClient extends EventEmitter {
       }
     });
     ws.on('close', () => {
+      clearInterval(this.heartbeat);
       this.state = 'disconnected';
       this.lastError ||= 'Connection to Codex closed.';
       for (const pending of this.pending.values()) {
@@ -91,7 +103,10 @@ export class CodexClient extends EventEmitter {
   receive(message) {
     if (message.method) {
       message.bridgeSequence = ++this.eventSequence;
-      if (message.id !== undefined) this.requests.set(JSON.stringify(message.id), message);
+      if (message.id !== undefined) {
+        message.requestToken = randomBytes(24).toString('hex');
+        this.requests.set(JSON.stringify(message.id), message);
+      }
       if (message.method === 'serverRequest/resolved') this.requests.delete(JSON.stringify(message.params.requestId));
       if (['turn/completed', 'thread/closed'].includes(message.method)) {
         for (const [key, request] of this.requests) {
@@ -127,6 +142,7 @@ export class CodexClient extends EventEmitter {
   close() {
     this.stopped = true;
     clearTimeout(this.reconnectTimer);
+    clearInterval(this.heartbeat);
     this.ws?.close();
   }
 }

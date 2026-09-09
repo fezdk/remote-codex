@@ -116,11 +116,11 @@ test('queue consumption races do not resend; failed steer preserves text and dis
   await page.locator('#message').fill('preserve after failure');await page.locator('#send').click();await expect(page.locator('#queue-list')).toContainText('preserve after failure');
   await page.route('**/message',route=>route.fulfill({status:503,json:{error:'Test delivery failure'}}));
   await page.getByRole('button',{name:'Send som steer',exact:true}).click();await expect(page.locator('#queue-list')).toContainText('Afsendelsen blev ikke bekræftet');await expect(page.locator('#queue-list')).toContainText('preserve after failure');
-  await page.getByRole('button',{name:'Tag ud af kø og redigér',exact:true}).click();await expect(page.locator('#message')).toHaveValue('preserve after failure');await page.unroute('**/message');
+  await page.getByRole('button',{name:'Gendan besked i skrivefeltet',exact:true}).click();await expect(page.locator('#message')).toHaveValue('preserve after failure');await page.unroute('**/message');
   await page.locator('#message').fill('lost delete acknowledgement');await page.locator('#send').click();await expect(page.locator('#queue-list')).toContainText('lost delete acknowledgement');
   await page.route('**/queue/*/delete',async route=>{await route.fetch();await route.abort('failed');});
   await page.getByRole('button',{name:'Tag ud af kø og redigér',exact:true}).click();await expect(page.locator('#queue-list')).toContainText('Afsendelsen blev ikke bekræftet');await page.unroute('**/queue/*/delete');
-  await page.getByRole('button',{name:'Tag ud af kø og redigér',exact:true}).click();await expect(page.locator('#message')).toHaveValue('lost delete acknowledgement');
+  await page.getByRole('button',{name:'Gendan besked i skrivefeltet',exact:true}).click();await expect(page.locator('#message')).toHaveValue('lost delete acknowledgement');
   await page.locator('#interrupt').click();
   await page.route('**/api/events',route=>route.fulfill({contentType:'text/event-stream',body:'event: status\ndata: {"state":"disconnected"}\n\n'}));await page.reload();await expect(page.locator('#connection-label')).toHaveText('Forbindelse afbrudt');
   const theme=await page.locator('html').getAttribute('data-theme');expect(await page.locator('#connection .status-dot').evaluate(el=>getComputedStyle(el).backgroundColor)).toBe(theme==='light'?'rgb(205, 52, 52)':'rgb(242, 105, 105)');

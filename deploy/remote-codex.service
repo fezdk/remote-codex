@@ -1,0 +1,18 @@
+[Unit]
+Description=Remote Codex web UI
+
+[Service]
+Type=simple
+# Replace /path/to/remote-codex with the absolute path to your checkout.
+WorkingDirectory=/path/to/remote-codex
+ExecStart=/usr/bin/node server/index.js
+Environment=REMOTE_CODEX_HOST=0.0.0.0
+Environment=REMOTE_CODEX_PORT=4310
+EnvironmentFile=-/path/to/remote-codex/.remote-codex/service.env
+UMask=0077
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

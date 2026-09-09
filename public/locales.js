@@ -2,6 +2,10 @@
 export const languages = { da: 'Dansk', en: 'English' };
 export const messages = {
   da: {
+    "error.pagination": "Codex returnerede en ugyldig eller for lang køliste.",
+    "session.truncated": "Visningen er forkortet på grund af størrelsen.",
+    "queue.restore": "Gendan besked i skrivefeltet",
+    "queue.savedDraft": "Gemt kladde — ikke sendt",
     "changes.title": "Ændrede filer",
     "changes.close": "Luk filpanel",
     "changes.source": "Kilde til ændringer",
@@ -37,6 +41,8 @@ export const messages = {
     "queue.title": "Beskedkø",
     "queue.waiting": "I kø · næste tur",
     "queue.sending": "Sender…",
+    "queue.steerSending": "Sender steer…",
+    "queue.steerAccepted": "Steer sendt · afventer visning i samtalen",
     "queue.edit": "Tag ud af kø og redigér",
     "queue.cancel": "Annullér besked",
     "queue.steer": "Send som steer",
@@ -214,6 +220,10 @@ export const messages = {
     'error.noPending': 'Anmodningen afventer ikke længere svar. Den kan være besvaret i en anden klient.',
   },
   en: {
+    "error.pagination": "Codex returned an invalid or excessive queue listing.",
+    "session.truncated": "The view is shortened due to its size.",
+    "queue.restore": "Restore message to composer",
+    "queue.savedDraft": "Saved draft — not sent",
     "changes.title": "Changed files",
     "changes.close": "Close file panel",
     "changes.source": "Change source",
@@ -249,6 +259,8 @@ export const messages = {
     "queue.title": "Message queue",
     "queue.waiting": "Queued · next turn",
     "queue.sending": "Sending…",
+    "queue.steerSending": "Sending steer…",
+    "queue.steerAccepted": "Steer sent · waiting to appear in the conversation",
     "queue.edit": "Remove from queue and edit",
     "queue.cancel": "Cancel message",
     "queue.steer": "Send as steer",

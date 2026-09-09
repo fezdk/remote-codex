@@ -1,5 +1,5 @@
 export function createState() {
-  return { threads: [], selectedId: null, thread: null, turns: [], requests: new Map(), connected: false, loading: false, ready: false };
+  return { threads: [], selectedId: null, thread: null, turns: [], requests: new Map(), connected: false, loading: false, ready: false, snapshotSequence: 0 };
 }
 
 export function mergeTurns(existing, incoming) {
@@ -14,6 +14,64 @@ export function activeTurn(state) {
 
 export function isWorking(state) {
   return Boolean(activeTurn(state) || state.thread?.status?.type === 'active');
+}
+
+// A steer RPC acknowledgement may arrive well before its userMessage event.
+// Keep local display entries separate from authoritative conversation history.
+export function createSteerTracker() {
+  const entries = new Map(), seen = new Map();
+  let existingItems = new WeakMap();
+  const text = parts => (parts || []).filter(part => part.type === 'text').map(part => part.text).join('\n');
+  const key = (turnId, itemId) => JSON.stringify([turnId, itemId]);
+  function remove(threadId, entry) {
+    const remaining = (entries.get(threadId) || []).filter(candidate => candidate !== entry);
+    if (remaining.length) entries.set(threadId, remaining);
+    else entries.delete(threadId);
+  }
+  function observe(threadId, turnId, item) {
+    if (item?.type !== 'userMessage' || !item.id || !entries.has(threadId)) return;
+    const observed = seen.get(threadId), itemKey = key(turnId, item.id);
+    if (observed.has(itemKey)) return;
+    const entry = entries.get(threadId).find(candidate => !existingItems.get(candidate).has(itemKey) && candidate.turnId === turnId && text(candidate.input) === text(item.content));
+    // An item can be announced before its text is complete. Only consume a match.
+    if (!entry) return;
+    observed.add(itemKey);
+    entry.received = true;
+    remove(threadId, entry);
+  }
+  function reconcile(threadId, turns) {
+    for (const turn of turns) for (const item of turn.items || []) observe(threadId, turn.id, item);
+  }
+  return {
+    track(threadId, entry, turns) {
+      reconcile(threadId, turns);
+      if (!seen.has(threadId)) seen.set(threadId, new Set());
+      existingItems.set(entry, new Set(turns.flatMap(turn => (turn.items || []).filter(item => item.type === 'userMessage').map(item => key(turn.id, item.id)))));
+      entries.set(threadId, [...entries.get(threadId) || [], entry]);
+    },
+    observe, reconcile, remove,
+    list: threadId => entries.get(threadId) || [],
+    reset() { entries.clear(); seen.clear(); existingItems = new WeakMap(); },
+  };
+}
+
+// RPC arrival order is not a snapshot watermark. Terminal events may precede a stale RPC reply.
+export function restoreHistory(state, snapshot, events, responseSequence = 0) {
+  const live = state.turns;
+  state.turns = mergeTurns([], snapshot);
+  state.snapshotSequence = responseSequence;
+  for (const event of events) {
+    if (event.id !== undefined) continue;
+    applyEvent(state, event);
+  }
+  // Preserve a known live prefix without replaying overlapping deltas twice.
+  for (const turn of state.turns) for (const item of turn.items || []) {
+    const current = live.find(candidate => candidate.id === turn.id)?.items?.find(candidate => candidate.id === item.id);
+    for (const field of ['text', 'aggregatedOutput']) {
+      if (typeof item[field] === 'string' && typeof current?.[field] === 'string' && current[field].startsWith(item[field])) item[field] = current[field];
+    }
+  }
+  if (activeTurn(state) && state.thread) state.thread.status = { ...state.thread.status, type: 'active' };
 }
 
 export function applyEvent(state, message) {
@@ -44,10 +102,16 @@ export function applyEvent(state, message) {
     }
   }
   if (p.threadId !== state.selectedId) return;
+  if (message.bridgeSequence <= state.snapshotSequence) {
+    const turn = state.turns.find(turn => turn.id === (p.turnId || p.turn?.id));
+    if (message.method.endsWith('Delta') || message.method.endsWith('/delta')) return;
+    if (message.method === 'turn/started' && turn) return;
+    if (message.method === 'item/started' && turn?.items?.some(item => item.id === p.item?.id)) return;
+  }
   if (message.method === 'turn/started' || message.method === 'turn/completed') {
     const old = state.turns.find(t => t.id === p.turn.id);
     state.turns = mergeTurns(state.turns, [{ ...p.turn, items: p.turn.items?.length ? p.turn.items : old?.items || [] }]);
-    if (state.thread) state.thread.status = { type: message.method === 'turn/started' ? 'active' : 'idle' };
+    if (state.thread) state.thread.status = { type: activeTurn(state) ? 'active' : 'idle' };
   }
   if (p.turnId && (message.method.startsWith('item/') || message.method === 'error')) {
     let turn = state.turns.find(t => t.id === p.turnId);

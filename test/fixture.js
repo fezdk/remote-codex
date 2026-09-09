@@ -16,7 +16,7 @@ export class FixtureCodex extends EventEmitter {
     ]}];
   }
   status(){return{state:'connected',platform:'linux',transport:'unix'};}
-  event(method,params,id){const message={method,params,bridgeSequence:++this.sequence,...(id!==undefined?{id}:{})};if(id!==undefined)this.requests.set(JSON.stringify(id),message);this.emit('event',message);}
+  event(method,params,id){const message={method,params,bridgeSequence:++this.sequence,...(id!==undefined?{id,requestToken:`fixture-request-${this.sequence}`} : {})};if(id!==undefined)this.requests.set(JSON.stringify(id),message);this.emit('event',message);}
   async subscribe(id){this.subscriptions.add(id);return this.rpc('thread/resume',{threadId:id,excludeTurns:true});}
   async rpc(method,params={}){
     this.calls.push({method,params});
@@ -55,7 +55,7 @@ export class FixtureCodex extends EventEmitter {
     if(method==='turn/steer'){
       const turn=this.turns.find(t=>t.id===params.expectedTurnId);
       if(!turn||turn.status!=='inProgress')throw new Error('Turn is no longer active.');
-      const item={id:'steered',type:'userMessage',content:params.input};turn.items.push(item);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item});return{turnId:turn.id};
+      const item={id:`steered-${this.sequence}`,type:'userMessage',content:params.input};turn.items.push(item);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item});return{turnId:turn.id};
     }
     if(method==='turn/interrupt'){
       const turn=this.turns.find(t=>t.id===params.turnId);turn.status='interrupted';this.event('turn/completed',{threadId:params.threadId,turn:structuredClone(turn)});return{};

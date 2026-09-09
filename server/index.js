@@ -1,8 +1,7 @@
-import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { homedir, networkInterfaces } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
+import { loadAccessKey } from './credential-store.js';
 import { CodexClient } from './codex.js';
 import { createWebServer } from './http.js';
 
@@ -16,18 +15,7 @@ let token = process.env.REMOTE_CODEX_TOKEN;
 if (!token) {
   const stateDir = resolve(root, '.remote-codex');
   const tokenPath = resolve(stateDir, 'access-key');
-  await mkdir(stateDir, { recursive: true, mode: 0o700 });
-  try { token = (await readFile(tokenPath, 'utf8')).trim(); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    token = randomBytes(32).toString('base64url');
-    try { await writeFile(tokenPath, `${token}\n`, { mode: 0o600, flag: 'wx' }); }
-    catch (writeError) {
-      if (writeError.code !== 'EEXIST') throw writeError;
-      token = (await readFile(tokenPath, 'utf8')).trim();
-    }
-  }
-  await chmod(tokenPath, 0o600);
+  token = await loadAccessKey(stateDir);
   console.log(`Access key: stored in ${tokenPath}`);
 }
 if (token.length < 24) throw new Error('Use an access key of at least 24 characters.');

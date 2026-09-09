@@ -1,7 +1,7 @@
 import { t, showError, errorText } from './i18n.js';
 const $ = id => document.getElementById(id);
 export function initProjects({ api, getDefaultCwd, onCreated }) {
-  let result = null, failure = null, checking = false, submitting = false, version = 0, timer, selected = -1;
+  let result = null, failure = null, checking = false, submitting = false, version = 0, generation = 0, timer, selected = -1;
   function render() {
     const choices = result?.suggestions || [];
     const fragment = document.createDocumentFragment();
@@ -54,12 +54,13 @@ export function initProjects({ api, getDefaultCwd, onCreated }) {
   $('new-dialog').addEventListener('cancel', event => { if (submitting) event.preventDefault(); });
   $('new-form').onsubmit = async event => {
     event.preventDefault(); if ($('create-session').disabled) return;
+    const epoch = generation;
     const cwd = result?.path || $('cwd').value.trim();
     const createDirectory = result?.state === 'missing' && $('create-directory').checked;
     submitting = true; $('new-error').textContent = ''; $('close-dialog').disabled = true; render();
-    try { const response = await api('/api/threads', { cwd, ...(createDirectory ? { createDirectory: true } : {}) }); $('new-dialog').close(); await onCreated(response); }
-    catch (error) { showError($('new-error'), error); await lookup(); }
-    finally { submitting = false; $('close-dialog').disabled = false; render(); }
+    try { const response = await api('/api/threads', { cwd, ...(createDirectory ? { createDirectory: true } : {}) }); if (epoch !== generation) return; $('new-dialog').close(); await onCreated(response); }
+    catch (error) { if (epoch !== generation) return; showError($('new-error'), error); await lookup(); }
+    finally { if (epoch === generation) { submitting = false; $('close-dialog').disabled = false; render(); } }
   };
-  return { render, open() { if (submitting) return; $('cwd').value = getDefaultCwd() || ''; $('new-error').textContent = ''; $('create-directory').checked = false; result = null; $('new-dialog').showModal(); lookup(); } };
+  return { render, reset() { ++generation; ++version; clearTimeout(timer); $('new-dialog').close(); result = null; failure = null; submitting = false; checking = false; $('new-form').reset(); $('new-error').textContent = ''; $('close-dialog').disabled = false; render(); }, open() { if (submitting) return; $('cwd').value = getDefaultCwd() || ''; $('new-error').textContent = ''; $('create-directory').checked = false; result = null; $('new-dialog').showModal(); lookup(); } };
 }

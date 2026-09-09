@@ -71,10 +71,11 @@ test('approval decisions are scoped, offered by Codex and cannot be replayed',as
   const {request,codex}=await setup(t);
   await request('/api/threads/session-one/open',{});
   await request('/api/threads/session-one/message',{text:'approval'});
-  assert.equal((await request('/api/respond',{id:42,decision:'acceptForSession'})).status,400);
-  assert.equal((await request('/api/respond',{id:42,decision:'accept'})).status,200);
+  const requestToken=codex.requests.get('42').requestToken;
+  assert.equal((await request('/api/respond',{id:42,requestToken,decision:'acceptForSession'})).status,400);
+  assert.equal((await request('/api/respond',{id:42,requestToken,decision:'accept'})).status,200);
   assert.deepEqual(codex.calls.at(-1),{method:'respond',id:42,result:{decision:'accept'}});
-  assert.equal((await request('/api/respond',{id:42,decision:'accept'})).status,409);
+  assert.equal((await request('/api/respond',{id:42,requestToken,decision:'accept'})).status,409);
   assert.throws(()=>approvalResult({method:'item/commandExecution/requestApproval',params:{availableDecisions:['cancel']}},{decision:'accept'}));
   assert.throws(()=>approvalResult({method:'item/permissions/requestApproval',params:{}},{decision:'accept'}));
 });
@@ -122,4 +123,53 @@ test('project suggestions require login and missing directories require explicit
   assert.equal(codex.calls.some(call=>call.method==='thread/start'),false);
   assert.equal((await request('/api/threads',{cwd,createDirectory:true})).status,201);
   assert.equal((await stat(cwd)).isDirectory(),true);assert.deepEqual(codex.calls.at(-1),{method:'thread/start',params:{cwd}});
+});
+
+test('reused approval IDs require the current request token', async t => {
+  const { request, codex } = await setup(t);
+  await request('/api/threads/session-one/open', {});
+  await request('/api/threads/session-one/message', { text: 'approval' });
+  const old = codex.requests.get('42');
+  codex.event(old.method, { ...old.params, command: 'a different action' }, 42);
+  assert.equal((await request('/api/respond', { id: 42, requestToken: old.requestToken, decision: 'accept' })).status, 409);
+  assert.equal((await request('/api/respond', { id: 42, decision: 'accept' })).status, 409);
+  assert.equal(codex.calls.some(call => call.method === 'respond'), false);
+  assert.equal((await request('/api/respond', { id: 42, requestToken: codex.requests.get('42').requestToken, decision: 'decline' })).status, 200);
+});
+
+test('malformed JSON values and looping queue pagination fail with bounded requests', async t => {
+  const { request, codex } = await setup(t);
+  for (const value of [null, [], 'text', 42]) assert.equal((await request('/api/threads', value)).status, 400);
+  let calls = 0;
+  codex.rpc = async () => { calls++; return { data: [], nextCursor: 'repeated' }; };
+  const result = await request('/api/threads/session-one/queue');
+  assert.equal(result.status, 502); assert.equal((await result.json()).errorKey, 'error.pagination');
+  assert.equal(calls, 2);
+});
+
+test('snapshot restoration retains terminal events before the reply without doubling deltas', async () => {
+  const { restoreHistory } = await import('../public/state.js');
+  const state = createState(); state.selectedId = 'one'; state.thread = { id: 'one', status: { type: 'active' } };
+  const events = [
+    { method: 'turn/started', params: { threadId: 'one', turn: { id: 'turn', status: 'inProgress', items: [] } } },
+    { method: 'item/agentMessage/delta', params: { threadId: 'one', turnId: 'turn', itemId: 'item', delta: 'Hello' } },
+    { method: 'item/completed', params: { threadId: 'one', turnId: 'turn', item: { id: 'item', type: 'agentMessage', text: 'Hello world!' } } },
+    { method: 'turn/completed', params: { threadId: 'one', turn: { id: 'turn', status: 'completed', items: [] } } },
+  ].map((event, index) => ({ ...event, bridgeSequence: index + 1 }));
+  for (const event of events) applyEvent(state, structuredClone(event));
+  restoreHistory(state, [{ id: 'turn', status: 'inProgress', items: [{ id: 'item', type: 'agentMessage', text: 'Hello' }] }], events, 4);
+  assert.equal(state.turns[0].items[0].text, 'Hello world!'); assert.equal(activeTurn(state), undefined); assert.equal(state.thread.status.type, 'idle');
+  applyEvent(state, events[1]); applyEvent(state, events[0]);
+  assert.equal(state.turns[0].items[0].text, 'Hello world!'); assert.equal(activeTurn(state), undefined, 'late SSE delivery must not duplicate deltas or revive completed turns');
+  applyEvent(state, { method: 'turn/started', params: { threadId: 'one', turn: { id: 'next', status: 'inProgress', items: [] } } });
+  applyEvent(state, events.at(-1));
+  assert.equal(state.thread.status.type, 'active', 'an older completion cannot make a newer active turn idle');
+});
+
+test('login limits failed attempts without locking out repeated successful logins', async t => {
+  const { base } = await setup(t);
+  const login = token => fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+  for (let i = 0; i < 12; i++) assert.equal((await login(token)).status, 200);
+  for (let i = 0; i < 10; i++) assert.equal((await login('wrong')).status, 401);
+  assert.equal((await login('wrong')).status, 429);
 });

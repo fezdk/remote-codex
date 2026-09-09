@@ -2,13 +2,16 @@ import { initProjects } from './projects.js';
 import { initChanges } from './changes.js';
 import { initQueue } from './queue.js';
 import { t, initPreferences, showError } from './i18n.js';
-import { createState, mergeTurns, activeTurn, isWorking, applyEvent, title, project } from './state.js';
+import { createState, mergeTurns, activeTurn, isWorking, applyEvent, restoreHistory, title, project } from './state.js';
 
 const $ = id => document.getElementById(id);
 const state = createState();
-let events, nextCursor, turnsCursor, openVersion = 0, listVersion = 0, searchTimer, renderFrame;
+let events, streamWatchdog, nextCursor, turnsCursor, openVersion = 0, listVersion = 0, searchTimer, renderFrame;
 let bufferedEvents = [], requestSignature = '', defaultCwd = '', draftId;
 const drafts = new Map();
+const requestCards = new Map();
+let authEpoch = 0;
+const inFlight = new Set();
 let connectionStatus = { state: 'connecting' };
 const sessionTitle = thread => title(thread, t(state.loading ? 'session.loading' : 'nav.new'));
 const projectTitle = path => project(path, t('session.project'));
@@ -23,26 +26,45 @@ function el(tag, className, text) {
   if (text !== undefined) node.textContent = text;
   return node;
 }
-function notice(message) { showError($('notice-text'), message); $('notice').hidden = false; }
+function notice(message) { if (!$('login').hidden) return; showError($('notice-text'), message); $('notice').hidden = false; }
 async function api(path, data) {
-  const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', headers: data === undefined ? {} : { 'Content-Type': 'application/json' }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
+  const epoch = authEpoch, controller = new AbortController();
+  inFlight.add(controller);
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  try {
+  const response = await fetch(path, { signal: controller.signal, method: data === undefined ? 'GET' : 'POST', headers: data === undefined ? {} : { 'Content-Type': 'application/json' }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
   const result = await response.json();
+  if (epoch !== authEpoch) throw new Error(t('error.login'));
   if (!response.ok) {
     if (response.status === 401 && path !== '/api/login') showLogin();
     throw Object.assign(new Error(result.error || t('error.connection')), { errorKey: result.errorKey });
   }
   return result;
+  } catch (error) {
+    if (error.name === 'AbortError') throw Object.assign(new Error(t('error.timeout')), { errorKey: 'error.timeout' });
+    throw error;
+  } finally { clearTimeout(timeout); inFlight.delete(controller); }
 }
 function showLogin() {
+  ++authEpoch;
+  for (const controller of inFlight) controller.abort();
   events?.close(); events = null;
-  state.connected = false;
+  clearTimeout(streamWatchdog);
   ++openVersion; ++listVersion;
+  clearTimeout(searchTimer); cancelAnimationFrame(renderFrame); renderFrame = null;
+  defaultCwd = ''; nextCursor = null; turnsCursor = null;
+  Object.assign(state, createState()); drafts.clear(); requestCards.clear(); draftId = null; bufferedEvents = []; requestSignature = '';
+  queue.reset(); changes.selectThread(null); projects.reset();
+  $('message').value = ''; $('messages').replaceChildren(); $('requests').replaceChildren(); $('session-list').replaceChildren();
+  $('notice').hidden = true; $('notice-text').textContent = ''; $('session-view').hidden = true; $('welcome').hidden = false;
+  $('search').value = ''; setSidebar(false);
+  for (const id of ['project-name', 'session-title', 'session-path', 'model-label']) $(id).textContent = '';
   $('workspace').hidden = true; $('login').hidden = false;
 }
 function setConnection(status) {
   connectionStatus = status;
   state.connected = status.state === 'connected';
-  if (!state.connected) { state.requests.clear(); renderRequests(); }
+  if (!state.connected) { state.ready = false; ++openVersion; state.loading = false; bufferedEvents = []; state.requests.clear(); renderRequests(); }
   renderConnection();
   renderControls();
 }
@@ -60,20 +82,35 @@ async function enter() {
   defaultCwd = status.defaultCwd;
   $('login').hidden = true; $('workspace').hidden = false;
   setConnection(status);
+  connectEvents();
+}
+function connectEvents() {
   events?.close();
   events = new EventSource('/api/events');
-  events.addEventListener('status', event => {
+  const stream = events;
+  const keepAlive = () => {
+    clearTimeout(streamWatchdog);
+    streamWatchdog = setTimeout(() => {
+      if (stream !== events) return;
+      setConnection({ state: 'disconnected', errorKey: 'connection.browserLost' });
+      connectEvents();
+    }, 45000);
+  };
+  keepAlive();
+  const listen = (type, handler) => stream.addEventListener(type, event => { if (stream === events) { keepAlive(); handler(event); } });
+  listen('heartbeat', () => {});
+  listen('status', event => {
     const wasConnected = state.connected;
     const status = JSON.parse(event.data);
     setConnection(status);
     if (status.state === 'connected' && !wasConnected) resync();
   });
-  events.addEventListener('pending', event => {
+  listen('pending', event => {
     state.requests = new Map(JSON.parse(event.data).map(r => [JSON.stringify(r.id), r]));
     renderRequests();
   });
-  events.addEventListener('resync', () => resync());
-  events.addEventListener('codex', event => {
+  listen('resync', () => resync());
+  listen('codex', event => {
     const message = JSON.parse(event.data);
     if (state.loading) bufferedEvents.push(message);
     applyEvent(state, message); changes.event(message); queue.event(message);
@@ -81,13 +118,16 @@ async function enter() {
     scheduleRender();
   });
   events.onerror = () => {
+    if (stream !== events) return;
     setConnection({ state: 'disconnected', errorKey: 'connection.browserLost' });
     api('/api/status').catch(error => { if (!$('login').hidden) showError($('login-error'), error); });
   };
 }
 async function resync() {
   if (!state.connected) return;
+  const epoch = authEpoch;
   await loadThreads().catch(error => notice(error));
+  if (epoch !== authEpoch) return;
   const target = state.selectedId || new URLSearchParams(location.hash.slice(1)).get('session');
   if (target) await openThread(target, true);
 }
@@ -148,11 +188,8 @@ async function openThread(id, resyncing = false) {
     state.thread.model ||= response.model;
     const page = await api(`/api/threads/${encodeURIComponent(id)}/turns`);
     if (version !== openVersion) return;
-    state.turns = mergeTurns([], [...page.data].reverse());
+    restoreHistory(state, [...page.data].reverse(), bufferedEvents, page.bridgeSequence);
     turnsCursor = page.nextCursor;
-    for (const message of bufferedEvents) {
-      if (message.id === undefined && message.bridgeSequence > page.bridgeSequence) applyEvent(state, message);
-    }
     bufferedEvents = [];
     state.ready = true; changes.refresh(); queue.refresh();
   } catch (error) {
@@ -180,7 +217,7 @@ function renderHeader() {
 
 // Build text and a small Markdown subset with DOM nodes. No model output is inserted as HTML.
 function inline(node, text) {
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))/g;
+  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\[\]\n]+\]\(https?:\/\/[^\s()]+\))/g;
   let start = 0;
   for (const match of text.matchAll(pattern)) {
     node.append(document.createTextNode(text.slice(start,match.index)));
@@ -197,9 +234,13 @@ function inline(node, text) {
 }
 function markdown(text) {
   const node = el('div','message-body');
-  const parts = String(text).split(/```[^\n]*\n([\s\S]*?)(?:```|$)/g);
+  const parts = displayText(text).split(/```[^\n`]*\n([\s\S]*?)(?:```|$)/g);
   parts.forEach((part,index) => { if (index % 2) { const pre = el('pre'); pre.append(el('code','',part)); node.append(pre); } else inline(node,part); });
   return node;
+}
+function displayText(text) {
+  const value = String(text);
+  return value.length > 200000 ? `${value.slice(0, 200000)}\n\n${t('session.truncated')}` : value;
 }
 function renderItem(item) {
   if (item.type === 'userMessage' || item.type === 'agentMessage') {
@@ -210,11 +251,11 @@ function renderItem(item) {
     label.append(el('span','avatar',user ? t('session.you').slice(0, 1) : '⌘'),document.createTextNode(user ? t('session.you') : 'Codex'));
     wrapper.append(label);
     const text = user ? (item.content || []).map(c => c.text || (c.type === 'image' || c.type === 'localImage' ? t('session.image') : `[${c.type}]`)).join('\n') : item.text || '';
-    wrapper.append(user ? el('div','message-body',text) : markdown(text));
+    wrapper.append(user ? el('div','message-body',displayText(text)) : markdown(text));
     for (const q of item.questions || []) {
       const card = el('div','request-card'); card.append(el('p','',q.title));
       const actions = el('div','request-actions');
-      for (const option of q.options || []) { const b = el('button','',option); b.onclick = () => { $('message').value = option; drafts.set(state.selectedId, option); $('message').focus(); renderControls(); }; actions.append(b); }
+      for (const option of q.options || []) { const b = el('button','',option); b.onclick = () => queue.restoreDraft(option); actions.append(b); }
       card.append(actions); wrapper.append(card);
     }
     return wrapper;
@@ -229,7 +270,7 @@ function renderItem(item) {
   else if (item.type === 'commandExecution') text = [item.cwd, item.aggregatedOutput, item.exitCode != null ? t('tool.exit', { code: item.exitCode }) : null].filter(v=>v != null).join('\n');
   else if (item.type === 'fileChange') text = (item.changes || []).map(c => `${c.path}\n${c.diff || ''}`).join('\n\n');
   else text = item.text || JSON.stringify(item,null,2);
-  details.append(el('pre','',text || t('tool.waiting')));
+  details.append(el('pre','',displayText(text || t('tool.waiting'))));
   return details;
 }
 function renderMessages(forceBottom = false) {
@@ -247,6 +288,14 @@ function renderMessages(forceBottom = false) {
     }
     if (turn.error) fragment.append(el('div','turn-error', turn.error.message || t('error.codex')));
     if (turn.status === 'interrupted') fragment.append(el('div','turn-marker',t('status.interrupted')));
+  }
+  for (const item of queue.messages()) {
+    const message = renderItem({ id: `local-steer-${item.id}`, type: 'userMessage', content: item.input });
+    message.classList.add('pending-steer');
+    message.dataset.deliveryState = item.confirmed ? 'accepted' : 'sending';
+    const status = el('div', 'delivery-status', t(item.confirmed ? 'queue.steerAccepted' : 'queue.steerSending'));
+    status.setAttribute('role', 'status');
+    message.append(status); fragment.append(message);
   }
   $('messages').replaceChildren(fragment);
   $('older-turns').hidden = !turnsCursor || state.loading;
@@ -274,13 +323,20 @@ function renderControls() {
   queue.render();
 }
 function renderRequests() {
+  const pendingTokens = new Set([...state.requests.values()].map(request => request.requestToken));
+  for (const token of requestCards.keys()) if (!pendingTokens.has(token)) requestCards.delete(token);
   const requests = [...state.requests.values()].filter(r => r.params?.threadId === state.selectedId);
   const signature = JSON.stringify(requests);
   if (signature === requestSignature) return;
   requestSignature = signature;
+  const focused = $('requests').contains(document.activeElement) ? document.activeElement : null;
   const fragment = document.createDocumentFragment();
   for (const request of requests) {
+    const previous = requestCards.get(request.requestToken);
+    if (previous && previous.dataset.signature === JSON.stringify(request)) { fragment.append(previous); continue; }
     const card = el('form','request-card');
+    card.dataset.requestToken = request.requestToken; card.dataset.signature = JSON.stringify(request);
+    requestCards.set(request.requestToken, card);
     const isQuestions = request.method === 'item/tool/requestUserInput';
     const supported = ['item/commandExecution/requestApproval','item/fileChange/requestApproval'].includes(request.method);
     card.append(ui('h3','',isQuestions ? 'request.questions' : supported ? 'request.approval' : 'request.originalTitle'));
@@ -310,7 +366,7 @@ function renderRequests() {
     const actions = el('div','request-actions');
     const respond = async payload => {
       for (const b of card.querySelectorAll('button')) b.disabled=true;
-      try { await api('/api/respond',{ id: request.id, ...payload }); state.requests.delete(JSON.stringify(request.id)); renderRequests(); }
+      try { await api('/api/respond',{ id: request.id, requestToken: request.requestToken, ...payload }); if (state.requests.get(JSON.stringify(request.id))?.requestToken === request.requestToken) state.requests.delete(JSON.stringify(request.id)); renderRequests(); }
       catch (error) { showError(errorNode, error);for (const b of card.querySelectorAll('button')) b.disabled=false; }
     };
     if (supported) {
@@ -330,6 +386,7 @@ function renderRequests() {
     card.append(errorNode,actions);fragment.append(card);
   }
   $('requests').replaceChildren(fragment);
+  if (focused?.isConnected) focused.focus({ preventScroll: true });
 }
 function renderAll(forceBottom = false) { renderList(); renderHeader(); renderMessages(forceBottom); renderRequests(); renderControls(); }
 function scheduleRender() {
@@ -344,7 +401,7 @@ $('login-form').onsubmit = async event => {
   finally {button.disabled=false;}
 };
 $('logout').onclick = async () => {
-  try { await api('/api/logout',{}); drafts.clear(); queue.reset(); changes.selectThread(null); Object.assign(state,createState()); $('message').value=''; $('messages').replaceChildren(); $('requests').replaceChildren(); $('session-list').replaceChildren(); $('session-view').hidden=true; $('welcome').hidden=false; history.replaceState(null,'',location.pathname);showLogin(); }
+  try { await api('/api/logout',{}); history.replaceState(null,'',location.pathname);showLogin(); }
   catch(error) {notice(error);}
 };
 $('dismiss-notice').onclick=()=>{$('notice').hidden=true;};
@@ -368,7 +425,7 @@ $('interrupt').onclick=async()=>{const turn=activeTurn(state);if(!turn)return;tr
 window.addEventListener('hashchange',()=>{const id=new URLSearchParams(location.hash.slice(1)).get('session');if(id&&id!==state.selectedId)openThread(id);});
 setInterval(()=>{if(state.connected&&!document.hidden&&!state.loading)loadThreads().catch(()=>{});},30000);
 const changes = initChanges({ api, getState: () => state });
-const queue = initQueue({ api, getState: () => state, notice, renderApp: renderAll, saveDraft: (id, text) => drafts.set(id, text) });
-const projects = initProjects({ api, getDefaultCwd: () => state.thread?.cwd || defaultCwd, onCreated: async result => { await loadThreads(); await openThread(result.thread.id); } });
+const queue = initQueue({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text) });
+const projects = initProjects({ api, getDefaultCwd: () => state.thread?.cwd || defaultCwd, onCreated: async result => { await loadThreads().catch(notice); await openThread(result.thread.id); } });
 initPreferences(() => { renderConnection(); renderAll(); changes.render(); projects.render(); });
 enter().catch(()=>showLogin());

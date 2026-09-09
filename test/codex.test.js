@@ -50,3 +50,24 @@ test('WebSocket protocol initializes, correlates RPC, routes approvals and resto
   assert.equal(calls.filter(c=>c.method==='thread/resume').length,2);
   assert.equal(calls.filter(c=>c.method==='test/pending').length,1,'mutations are not replayed');
 });
+
+test('heartbeat detects an unresponsive peer and readiness waits for restored subscriptions', { timeout: 5000 }, async t => {
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1', autoPong: false }); await once(server, 'listening');
+  let peer, resume;
+  server.on('connection', socket => {
+    peer = socket;
+    socket.on('message', bytes => {
+      const message = JSON.parse(bytes);
+      if (message.method === 'initialize') socket.send(JSON.stringify({ id: message.id, result: {} }));
+      if (message.method === 'thread/resume') resume = () => socket.send(JSON.stringify({ id: message.id, result: {} }));
+    });
+  });
+  const client = new CodexClient({ url: `ws://127.0.0.1:${server.address().port}`, heartbeatMs: 100 });
+  t.after(() => { client.close(); for (const socket of server.clients) socket.terminate(); server.close(); });
+  client.subscriptions.add('one'); client.connect();
+  while (!resume) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(client.state, 'connecting');
+  const ready = connected(client); resume(); await ready;
+  const status = once(client, 'status'); await once(peer, 'ping');
+  const [disconnected] = await status; assert.equal(disconnected.state, 'disconnected');
+});

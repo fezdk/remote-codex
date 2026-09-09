@@ -22,7 +22,11 @@ async function body(req) {
     if (length > 1024 * 1024) throw fail('error.tooLarge', 413);
     chunks.push(chunk);
   }
-  try { return JSON.parse(Buffer.concat(chunks).toString()); }
+  try {
+    const input = JSON.parse(Buffer.concat(chunks).toString());
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('error.json');
+    return input;
+  }
   catch { throw fail('error.json'); }
 }
 
@@ -57,7 +61,12 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
     if (res.writableLength > 2 * 1024 * 1024) return res.destroy();
     res.write(`id: ${++eventId}\nevent: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
   };
-  const broadcast = (type, data) => { for (const res of streams.keys()) sendEvent(res, type, data); };
+  const broadcast = (type, data) => {
+    for (const [res, id] of streams) {
+      if (!(sessions.get(id) > Date.now())) { res.end(); streams.delete(res); }
+      else sendEvent(res, type, data);
+    }
+  };
   const onEvent = data => broadcast('codex', data);
   const onStatus = data => broadcast('status', data);
   codex.on('event', onEvent);
@@ -101,6 +110,7 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
         if (++attempt.count > 10) throw fail('error.rateLimit', 429);
         const input = await body(req);
         if (typeof input.token !== 'string' || !equal(input.token, token)) throw fail('error.key', 401);
+        attempts.delete(remote);
         const id = randomBytes(32).toString('hex');
         sessions.set(id, Date.now() + 12 * 60 * 60 * 1000);
         res.setHeader('Set-Cookie', `${cookieName}=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${secureCookie}`);
@@ -171,8 +181,10 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
           json(200, action === 'git' ? await gitChanges(thread.cwd) : await gitFileDiff(thread.cwd, url.searchParams.get('path'))); return;
         }
         if (action === 'queue' && req.method === 'GET') {
-          const data = []; let cursor;
+          const data = [], seen = new Set(); let cursor;
           do {
+            if (seen.size >= 10 || seen.has(cursor)) throw fail('error.pagination', 502);
+            seen.add(cursor);
             const page = await codex.rpc('thread/queue/list', { threadId, limit: 100, ...(cursor ? { cursor } : {}) });
             data.push(...page.data); cursor = page.nextCursor;
           } while (cursor && data.length < 1000);
@@ -216,7 +228,7 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
       if (path === '/api/respond' && req.method === 'POST') {
         const input = await body(req);
         const request = codex.requests.get(JSON.stringify(input.id));
-        if (!request) throw fail('error.resolved', 409);
+        if (!request || typeof input.requestToken !== 'string' || input.requestToken !== request.requestToken) throw fail('error.resolved', 409);
         codex.respond(input.id, approvalResult(request, input));
         json(200, { ok: true }); return;
       }
@@ -229,7 +241,7 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
   const heartbeat = setInterval(() => {
     for (const [res, id] of streams) {
       if (!sessions.has(id) || sessions.get(id) < Date.now()) { res.end(); streams.delete(res); }
-      else res.write(': heartbeat\n\n');
+      else sendEvent(res, 'heartbeat', {});
     }
     for (const [id, expiry] of sessions) if (expiry < Date.now()) sessions.delete(id);
     for (const [ip, attempt] of attempts) if (attempt.until < Date.now()) attempts.delete(ip);
