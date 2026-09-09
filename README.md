@@ -4,6 +4,30 @@ A browser interface for your existing local Codex sessions. A small Node.js serv
 
 This is an independent, experimental project, not an official OpenAI product or an integration into chatgpt.com. It focuses on Codex. The [T3 Code research notes](docs/t3-code-research.md) (in Danish) explain the architecture comparison behind that choice.
 
+The [code audit](docs/code-audit.md) records the security and correctness review, fixes, regression tests, and remaining limitations.
+
+## Screenshots
+
+The real interface with fictional projects, conversations, and code changes. No personal session data or credentials are shown.
+
+**Dark theme — chat, queued instructions, and Codex file changes side by side.**
+
+![Remote Codex in dark mode, showing a demo conversation, message queue, and a colored code diff](docs/screenshots/desktop-dark.png)
+
+<details>
+<summary>Light theme and Git changes</summary>
+
+![Remote Codex in light mode with the Git changes tab and an unstaged diff](docs/screenshots/desktop-light.png)
+
+</details>
+
+<details>
+<summary>Mobile — conversation, queue, and steering controls</summary>
+
+<img src="docs/screenshots/mobile-dark.png" alt="Remote Codex on a mobile screen, showing a demo conversation, queued instruction, and message composer" width="430">
+
+</details>
+
 ## Requirements
 
 - Node.js **18.19 or later** and npm.
@@ -24,7 +48,7 @@ npm start
 
 There is no frontend build step. The web server listens on **0.0.0.0:4310**, covering all IPv4 network interfaces. Open **http://127.0.0.1:4310** on the host, or `http://HOST-IP:4310` from another computer. Available network addresses are printed at startup.
 
-On first startup, the server generates an access key in `.remote-codex/access-key` with file permissions `0600`. Display it in a trusted local terminal and paste it into the login form:
+On first startup, the server generates an access key in `.remote-codex/access-key` with file permissions `0600` in a `0700` directory. Existing storage must belong to the service user; symlinks, hardlinked keys, and special files are rejected. Display it in a trusted local terminal and paste it into the login form:
 
 ```bash
 cat .remote-codex/access-key
@@ -37,6 +61,35 @@ codex app-server daemon start
 ```
 
 Stop the web server with Ctrl+C. The Codex daemon and its work continue running. Keep the web server running while using the browser. `npm start` does not install a background system service.
+
+## Background service on Linux
+
+Use the [systemd user-service template](deploy/remote-codex.service) to keep the web server running independently of a terminal, start it at boot, and restart it after a failure.
+
+1. Copy the template to `~/.config/systemd/user/remote-codex.service`, creating that directory if needed.
+2. Replace both occurrences of `/path/to/remote-codex` in the service settings with your checkout's absolute path. Verify that `/usr/bin/node` is the intended Node executable.
+3. Optionally put environment settings in `.remote-codex/service.env`, with permissions `0600`. Use systemd environment-file syntax (`NAME=value`, without `export` or shell commands). This private file is ignored by Git and is loaded only by the service.
+4. Stop any manually started web server using the same port, then run:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now remote-codex.service
+loginctl enable-linger "$(id -un)"
+```
+
+Enabling lingering allows the user's service manager to start at boot and continue after logout. This changes the lifetime of the user's service manager, not just this one service, and may require administrator authorization on some systems. No crontab entry is needed.
+
+Manage the service with:
+
+```bash
+systemctl --user status remote-codex.service
+systemctl --user restart remote-codex.service
+journalctl --user -u remote-codex.service -n 50 --no-pager
+```
+
+To stop it and disable automatic startup, run `systemctl --user disable --now remote-codex.service`. Leave lingering enabled if other user services rely on it. Runtime logs go to the user journal and can include local project paths; keep them out of the public repository.
+
+This service runs only the web server. The Codex daemon must have its own startup arrangement. The web server retries its connection if the daemon is not ready yet. Restarting the web server requires a new browser login.
 
 ## Features
 
@@ -78,15 +131,19 @@ The queue uses the experimental `thread/queue/*` methods in Codex 0.153.4. It be
 
 Already received messages are never edited in the conversation history. Editing mode ends automatically when Codex starts a new turn or receives the submitted text. Any unsent text remains a new draft. Messages being submitted are displayed without editing controls. If delivery cannot be confirmed, no action is replayed automatically; review the queue and conversation before retrying.
 
+Replacing an unsent draft retains its text in a recovery card. **Restore message to composer** restores it explicitly. A late send acknowledgement does not clear text typed after that submission.
+
+Steering instructions appear immediately in the conversation with a sending indicator. After acceptance, the text stays visible until Codex records the matching message in its conversation history. This also applies when converting a queued message to a steer. Multiple pending steers remain visible across session switches and are reconciled individually, including identical text. Arrow Up can recall an accepted steer while its history event is still pending. These temporary display entries live only in the current page and are cleared by reload or logout; they do not change or replay Codex messages.
+
 Drafts and text removed from the queue are kept only in the current browser page. Reloading the page discards them; messages still in Codex's queue are retained by Codex.
 
 ## Reviewing file changes
 
 The **Codex** tab summarizes completed `fileChange` items recorded in the selected session's history. Repeated changes are grouped by file. Added/removed line counts sum individual patches; they are not a net diff. Changes made through shell commands or other tools appear here only if Codex records them as file changes.
 
-The **Git** tab shows the project's current staged, unstaged, and untracked changes, including edits from other sessions or manual work. It only reads Git and does not change the index or working tree. Projects outside a Git repository show an explanation. This tab requires the project files to be local to the web server's host.
+The **Git** tab shows the project's current staged, unstaged, and untracked changes, including edits from other sessions or manual work. It only reads Git and does not change the index or working tree. Configured clean/process filters are disabled during inspection, so filtered repositories (including Git LFS) may show different diffs from a normal filtered Git command. Parent repositories show submodule commit-pointer changes without scanning dirty submodule contents; open the submodule as its own project to inspect its working tree. Projects outside a Git repository show an explanation. This tab requires the project files to be local to the web server's host.
 
-The panel refreshes when file changes or turns complete. Use its refresh button to pick up external Git changes. Large histories and diffs are capped and marked as truncated. Binary untracked files and symlink contents are not opened as text.
+The panel refreshes when file changes or turns complete. Use its refresh button to pick up external Git changes. Large histories and diffs are capped and marked as truncated. A selected file displays at most 5,000 diff lines and 200,000 characters; conversation and tool items display at most 200,000 characters each. Binary untracked files and symlink contents are not opened as text.
 
 On desktop, drag the divider between the conversation and changes panel to give diffs more room. The width is remembered in the browser and constrained to the available space. Double-click to reset it. The divider supports Tab focus, left/right arrow keys, and Home/End for the minimum/maximum width. On smaller screens, the changes panel opens over the conversation.
 
@@ -188,13 +245,15 @@ public/                 HTML, CSS, and browser JavaScript modules
   i18n.js               Translation helpers and language controls
   preferences.js        Theme and language applied before first paint
 server/
-  index.js              Startup, access key, and environment configuration
+  index.js              Startup and environment configuration
+  credential-store.js         Validated local credential storage
   http.js               Browser API, static assets, authentication, and SSE
   codex.js              Connection to the existing Codex daemon
   changes.js            Codex change summaries and read-only Git operations
   projects.js           Directory lookup, validation, and explicit creation
 test/                   Unit, integration, and browser tests
-docs/                   Architecture research and references
+scripts/                Reproducible README screenshot capture
+docs/                   Code audit, architecture research, references, and demo screenshots
 ```
 
 ## Architecture and protocol
@@ -212,7 +271,7 @@ Browser ── HTTP(S), cookie, SSE ── Node web server
 
 The Unix socket uses an HTTP WebSocket Upgrade handshake. `perMessageDeflate` is deliberately disabled because the tested daemon closed the connection when compression was offered. `codex app-server proxy` is a byte proxy for this transport, not a JSONL interface.
 
-The bridge maintains one shared upstream subscription for each opened session. Multiple browser tabs see the same approval request, which can be answered only once. Closing a browser does not stop Codex. Subscriptions remain in the bridge until its restart to retain live activity and pending requests.
+The bridge maintains one shared upstream subscription for each opened session. Multiple browser tabs see the same approval request, which can be answered only once. Responses are bound to a random token for that exact request, preventing stale approval cards from matching a reused upstream ID. Reload older browser clients after upgrading. Closing a browser does not stop Codex. Subscriptions remain in the bridge until its restart to retain live activity and pending requests.
 
 See the official [Codex App Server documentation](https://learn.chatgpt.com/docs/app-server). Generate protocol types for an installed Codex version with:
 
@@ -229,9 +288,11 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-Integration tests use temporary local HTTP/WebSocket servers and Git repositories. Browser tests use an isolated fixture on port 4311, never real Codex sessions. They cover authentication, access control, safe rendering, history, streaming, approvals, questions, steering, interruption, drafts, reloads, and mobile navigation. They also cover translations, themes, directory suggestions and creation, Git diffs, panel resizing, queue editing/cancellation, delivery failures, and concurrent queue actions. Transport tests verify reconnection and that actions are not automatically replayed.
+Integration tests use temporary local HTTP/WebSocket servers and Git repositories. Browser tests use an isolated fixture on port 4311, never real Codex sessions. They cover authentication, access control, safe rendering, history, streaming, approvals, questions, steering, interruption, drafts, reloads, and mobile navigation. They also cover translations, themes, directory suggestions and creation, Git diffs, panel resizing, queue editing/cancellation, delivery failures, and concurrent queue actions. Transport tests verify reconnection, heartbeat expiry, subscription readiness, and that actions are not automatically replayed. Audit regressions also cover stale approval tokens, Git filters, key storage, snapshot races, logout during delivery, lost drafts, retained answers, and bounded rendering.
 
 Tests require permission to open local sockets and run browser processes. Playwright may require additional operating system packages to launch Chromium. Reports and traces are written to ignored directories.
+
+To regenerate the README screenshots after installing Chromium, run `npm run screenshots`. The script serves the actual frontend on an ephemeral loopback port with entirely synthetic API responses, blocks external browser requests, and writes the three images to `docs/screenshots/`. It does not connect to a Codex daemon or read credentials, real sessions, or project files. Review the generated images before committing them; this directory is intentionally tracked, unlike browser test artifacts.
 
 Use `npm run dev` to restart the web server when source files change. Browser assets are served directly from `public/`; reload the page after edits. Server restarts require a new browser login.
 
