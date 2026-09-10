@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 export class FixtureCodex extends EventEmitter {
   constructor() {
     super();
-    this.requests = new Map(); this.subscriptions = new Set(); this.calls = []; this.sequence = 0; this.queues = new Map(); this.queueCount = 0;
+    this.requests = new Map(); this.subscriptions = new Set(); this.calls = []; this.sequence = 0; this.queues = new Map(); this.queueCount = 0; this.goals = new Map();
     this.threads = [
       { id:'session-one', name:'Byg et browser-UI', cwd:'/home/demo/projects/remote-codex', model:'local-model', status:{type:'idle'}, updatedAt:Date.now()/1000, canAcceptDirectInput:true },
       { id:'session-two', name:'Mit andet projekt', cwd:'/home/demo/projects/website', model:'local-model', status:{type:'idle'}, updatedAt:Date.now()/1000-100000, canAcceptDirectInput:true },
@@ -20,6 +20,14 @@ export class FixtureCodex extends EventEmitter {
   async subscribe(id){this.subscriptions.add(id);return this.rpc('thread/resume',{threadId:id,excludeTurns:true});}
   async rpc(method,params={}){
     this.calls.push({method,params});
+    if(method==='thread/goal/get')return{goal:structuredClone(this.goals.get(params.threadId)||null)};
+    if(method==='thread/goal/clear'){const cleared=this.goals.delete(params.threadId);this.event('thread/goal/cleared',{threadId:params.threadId});return{cleared};}
+    if(method==='thread/goal/set'){
+      const old=this.goals.get(params.threadId);
+      const replace=params.objective!==undefined&&(!old||old.objective!==params.objective||old.status==='complete');
+      const goal={...(replace?{threadId:params.threadId,objective:params.objective,status:'active',tokenBudget:null,tokensUsed:0,timeUsedSeconds:0,createdAt:Date.now()/1000}:old),...params,updatedAt:Date.now()/1000};
+      this.goals.set(params.threadId,goal);this.event('thread/goal/updated',{threadId:params.threadId,turnId:null,goal:structuredClone(goal)});return{goal:structuredClone(goal)};
+    }
     if(method==='thread/read'){const thread=this.threads.find(t=>t.id===params.threadId);return{thread:thread&&{...thread,status:{type:params.threadId==='session-one'&&this.turns.some(turn=>turn.status==='inProgress')?'active':'idle'}}};}
     if(method==='skills/list')return{data:params.cwds.map(cwd=>({cwd,errors:[],skills:[{name:'review',description:'Review project changes',path:'/workspace/demo-skills/review/SKILL.md',enabled:true},{name:'ui-polish',description:'Polish UI details',path:'/workspace/demo-skills/ui-polish/SKILL.md',enabled:true},{name:'disabled-skill',description:'Disabled',path:'/workspace/demo-skills/disabled/SKILL.md',enabled:false}]}))};
     if(method==='account/rateLimits/read')return{rateLimits:{limitId:'codex',primary:{usedPercent:25,windowDurationMins:300,resetsAt:1900000000},secondary:null}};

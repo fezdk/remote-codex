@@ -1,9 +1,9 @@
 // Shared by the composer and the bridge: never infer skills from ordinary words.
-export const commands = ['rename', 'compact', 'status', 'help'];
+export const commands = ['rename', 'compact', 'status', 'goal', 'help'];
 const reserved = new Set([...commands, 'model']);
 
 export function commandOf(text) {
-  const match = text.match(/^\s*\/(rename|compact|status|help)(?=\s|$)/);
+  const match = text.match(/^\s*\/(rename|compact|status|goal|help)(?=\s|$)/);
   return match ? { name: match[1], argument: text.slice(match[0].length).trim(), start: match[0].indexOf('/'), end: match[0].length } : null;
 }
 

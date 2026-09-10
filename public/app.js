@@ -2,6 +2,7 @@ import { initProjects } from './projects.js';
 import { initChanges } from './changes.js';
 import { initQueue } from './queue.js';
 import { initSessionTools } from './session-tools.js';
+import { initGoals } from './goals.js';
 import { initModels } from './models.js';
 import { t, initPreferences, showError } from './i18n.js';
 import { createState, mergeTurns, activeTurn, isWorking, applyEvent, restoreHistory, title, project, turnTiming, messageTiming } from './state.js';
@@ -58,7 +59,7 @@ function showLogin() {
   clearTimeout(searchTimer); cancelAnimationFrame(renderFrame); renderFrame = null;
   defaultCwd = ''; nextCursor = null; turnsCursor = null;
   Object.assign(state, createState()); drafts.clear(); requestCards.clear(); draftId = null; bufferedEvents = []; requestSignature = '';
-  queue.reset(); changes.selectThread(null); projects.reset(); sessionTools.reset(); models.reset();
+  queue.reset(); changes.selectThread(null); projects.reset(); sessionTools.reset(); models.reset(); goals.reset();
   $('message').value = ''; $('messages').replaceChildren(); $('requests').replaceChildren(); $('session-list').replaceChildren();
   $('notice').hidden = true; $('notice-text').textContent = ''; $('session-view').hidden = true; $('welcome').hidden = false;
   $('search').value = ''; setSidebar(false);
@@ -118,7 +119,7 @@ function connectEvents() {
     const message = JSON.parse(event.data);
     if (state.loading) bufferedEvents.push(message);
     if (historyRefresh) historyRefresh.events.push(message);
-    applyEvent(state, message); changes.event(message); queue.event(message); sessionTools.event(message); models.event(message);
+    applyEvent(state, message); changes.event(message); queue.event(message); sessionTools.event(message); models.event(message); goals.event(message);
     if (message.params?.threadId === state.selectedId && ['turn/started', 'turn/completed'].includes(message.method)) scheduleHistoryRefresh();
     if (message.method === 'bridge/subscriptionError' && message.params.threadId === state.selectedId) notice(message.params.message);
     scheduleRender();
@@ -188,7 +189,7 @@ async function openThread(id, resyncing = false) {
   history.replaceState(null, '', `#session=${encodeURIComponent(id)}`);
   if (!resyncing || state.thread?.id !== id) { state.turns = []; state.thread = state.threads.find(t => t.id === id) || { id }; }
   $('welcome').hidden = true; $('session-view').hidden = false;
-  changes.selectThread(id); queue.selectThread(id); sessionTools.selectThread(id);
+  changes.selectThread(id); queue.selectThread(id); sessionTools.selectThread(id); goals.selectThread(id);
   setSidebar(false); renderAll();
   try {
     const response = await api(`/api/threads/${encodeURIComponent(id)}/open`, {});
@@ -201,7 +202,7 @@ async function openThread(id, resyncing = false) {
     restoreHistory(state, [...page.data].reverse(), bufferedEvents, page.bridgeSequence);
     turnsCursor = page.nextCursor;
     bufferedEvents = [];
-    state.ready = true; changes.refresh(); queue.refresh();
+    state.ready = true; changes.refresh(); queue.refresh(); goals.refresh();
   } catch (error) {
     if (version === openVersion) notice(error);
   } finally {
@@ -449,7 +450,7 @@ function renderControls() {
   $('send-mode').textContent = active ? t('session.steer') : t('session.defaults');
   queue.render();
   sessionTools.render();
-  models.render();
+  models.render(); goals.render();
 }
 function renderRequests() {
   const pendingTokens = new Set([...state.requests.values()].map(request => request.requestToken));
@@ -562,7 +563,8 @@ setInterval(() => {
 }, 1000);
 setInterval(()=>{if(state.connected&&!document.hidden&&!state.loading)loadThreads().catch(()=>{});},30000);
 const changes = initChanges({ api, getState: () => state });
-const sessionTools = initSessionTools({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text) });
+const sessionTools = initSessionTools({ openGoal: () => goals.open(), api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text) });
+const goals = initGoals({ api, getState: () => state });
 const models = initModels({ api, getState: () => state, renderApp: renderAll, notice, isQueueBusy: () => queue.isBusy() });
 const queue = initQueue({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text), skillsFor: sessionTools.skillsFor, handleCommand: sessionTools.submit, isSettingsBusy: models.busy, refreshHistory: scheduleHistoryRefresh });
 const projects = initProjects({ api, getDefaultCwd: () => state.thread?.cwd || defaultCwd, onCreated: async result => { await loadThreads().catch(notice); await openThread(result.thread.id); } });

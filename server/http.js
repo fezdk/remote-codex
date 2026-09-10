@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createGoals } from './goals.js';
 import { messages } from '../public/locales.js';
 import { codexChanges, gitChanges, gitFileDiff } from './changes.js';
 import { suggestProjects, prepareProject } from './projects.js';
@@ -10,7 +11,7 @@ import { networkInterfaces } from 'node:os';
 
 const cookieName = 'remote_codex_session';
 const mime = { '/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8', '/state.js': 'text/javascript; charset=utf-8', '/style.css': 'text/css; charset=utf-8', '/icon.svg': 'image/svg+xml' };
-for (const name of ['preferences.js', 'i18n.js', 'locales.js', 'changes.js', 'queue.js', 'projects.js', 'input.js', 'session-tools.js', 'models.js']) mime[`/${name}`] = 'text/javascript; charset=utf-8';
+for (const name of ['preferences.js', 'i18n.js', 'locales.js', 'changes.js', 'queue.js', 'projects.js', 'input.js', 'session-tools.js', 'models.js', 'goals.js']) mime[`/${name}`] = 'text/javascript; charset=utf-8';
 const idOK = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(value);
 const fail = (errorKey, status = 400) => Object.assign(new Error(messages.en[errorKey] || errorKey), { status, errorKey });
 const equal = (a, b) => timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
@@ -58,6 +59,7 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
   const streams = new Map();
   const attempts = new Map();
   const sessionTools = createSessionTools(codex);
+  const goals = createGoals(codex);
   let eventId = 0;
   const sendEvent = (res, type, data) => {
     if (res.writableLength > 2 * 1024 * 1024) return res.destroy();
@@ -172,10 +174,16 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
         codex.subscriptions.add(result.thread.id);
         json(201, result); return;
       }
-      const match = path.match(/^\/api\/threads\/([^/]+)\/(open|turns|message|interrupt|changes|git|git-diff|queue|skills|status|command|settings)$/);
+      const match = path.match(/^\/api\/threads\/([^/]+)\/(open|turns|message|interrupt|changes|git|git-diff|queue|skills|status|command|settings|goal)$/);
       if (match) {
         const [, threadId, action] = match;
         if (!idOK(threadId)) throw fail('error.sessionId');
+        if (action === 'goal' && req.method === 'GET') { json(200, await goals.read(threadId)); return; }
+        if (action === 'goal' && req.method === 'POST') {
+          const input = await body(req);
+          if (!codex.subscriptions.has(threadId)) throw fail('error.openSession', 409);
+          json(200, await goals.change(threadId, input)); return;
+        }
         if (action === 'skills' && req.method === 'GET') { json(200, await sessionTools.skills(threadId, url.searchParams.get('refresh') === '1')); return; }
         if (action === 'status' && req.method === 'GET') { json(200, await sessionTools.status(threadId)); return; }
         if (action === 'settings' && req.method === 'GET') { json(200, await sessionTools.readSettings(threadId)); return; }

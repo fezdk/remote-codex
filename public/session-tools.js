@@ -5,7 +5,7 @@ import { isWorking, applyEvent } from './state.js';
 const $ = id => document.getElementById(id);
 const node = (tag, text, className = '') => { const el = document.createElement(tag); el.textContent = text; el.className = className; return el; };
 
-export function initSessionTools({ api, getState, notice, renderApp, getDraft, saveDraft }) {
+export function initSessionTools({ api, getState, notice, renderApp, getDraft, saveDraft, openGoal }) {
   const input = $('message'), mirror = $('input-highlight'), dialog = $('tools-dialog');
   let id = null, generation = 0, discovery = 0, catalog = [], skillState = 'loading', busy = false, view = null, data = null, error = null, request = 0, refreshTimer;
   const endpoint = action => `/api/threads/${encodeURIComponent(id)}/${action}`;
@@ -160,6 +160,7 @@ export function initSessionTools({ api, getState, notice, renderApp, getDraft, s
   async function execute(command, text) {
     if (busy || !id || !getState().ready || !getState().connected) return;
     if (command.name !== 'rename' && command.argument) { notice(t('tools.noArguments')); return; }
+    if (command.name === 'goal') { dialog.close(); openGoal(); clearCommand(text, id); renderApp(); return; }
     if (command.name === 'rename' && !command.argument) {
       show('rename'); $('session-name').value = getState().thread?.name || ''; $('session-name').focus();
       clearCommand(text, id); renderApp(); return;

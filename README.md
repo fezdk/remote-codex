@@ -147,11 +147,35 @@ This service runs only the web server. The Codex daemon must have its own startu
 - Separate **Codex** and **Git** changes tabs, a file list, colored diffs, and a draggable divider on desktop.
 - Danish and English UI translations, light and dark themes, and green/red connection status.
 - An activity indicator next to the message field, visible even when the conversation is scrolled up.
-- Session commands (`/rename`, `/compact`, `/status`, `/help`) and a **Session** menu.
+- Session commands (`/rename`, `/compact`, `/status`, `/goal`, `/help`) and a **Session** menu.
 - Project-scoped skill discovery, inline highlighting, and explicit skill attachments with `$skill-name` or `/skill-name`.
 - Model and reasoning-effort selectors in the composer, populated from the connected Codex server's model catalog.
 - Automatic reconnection, history resynchronization, and restored subscriptions. Submitted actions are never replayed automatically.
 - Mobile navigation and session links in the URL fragment. Drafts survive switching sessions within the same page, but not a page reload.
+
+## Goal controls
+
+The **Goal** button beside the model and effort selectors opens the selected session's native Goal. The feature name stays **Goal** in every UI language; descriptions and actions follow your language setting. `/goal` opens the same dialog.
+
+- Create an active Goal with an objective of up to 4,000 characters and an optional positive integer token budget. Blank means no token budget.
+- Edit the objective or budget, pause, resume, mark complete or blocked, and clear the Goal after an explicit confirmation.
+- Inspect server-reported status, tokens used, remaining token budget, and recorded processing time. Usage-limited and budget-limited states are displayed when reported by Codex; these are not manually assigned by the UI.
+- Stop the current response separately. An active Goal can schedule further turns, so pause it first when you want work to remain stopped.
+
+The bridge uses `thread/goal/get`, `thread/goal/set`, and `thread/goal/clear`, and listens for native updated/cleared events. Goal execution and continuation belong to the Codex server: the browser does not inject a chat prompt or run its own continuation loop. Creating or resuming an active Goal authorizes Codex to pursue it under that session's existing permissions.
+
+Changing the objective replaces the Goal and resets its usage accounting. Budget and status edits preserve accounting by omitting an unchanged objective from the native update. Clearing removes the Goal and its counters, while retaining the conversation. Usage comes from the Goal record, independently of transcript length or compaction; recorded time is not a browser stopwatch or an ETA.
+
+Live updates preserve unfinished form edits. If another client changes the Goal's configuration, saving the old form is blocked until you explicitly reload it. The bridge serializes its own mutations per session and checks the displayed configuration before writing; the native API has no atomic compare-and-set across other clients. Unknown mutation outcomes are read back and never automatically replayed. Reopening a session and reconnecting refresh the saved Goal. A server without this API shows an unavailable state while ordinary chat remains usable.
+
+See the official [thread Goal API](https://learn.chatgpt.com/docs/app-server#manage-a-thread-goal) for the native protocol. Availability depends on the installed Codex version and feature configuration.
+
+<details>
+<summary>Goal dialog (synthetic demo)</summary>
+
+![Goal dialog in the light theme, showing native usage and lifecycle controls](docs/screenshots/goal-light.png)
+
+</details>
 
 ## Choosing a model and effort
 
@@ -220,14 +244,15 @@ Commands are recognized at the beginning of the message, after optional whitespa
 | --- | --- |
 | `/rename New name` | Saves the session's name in Codex. `/rename` alone opens a name form. |
 | `/compact` | Starts Codex context compaction. Wait until the session is idle; this never interrupts an active turn. Progress appears in the conversation. |
+| `/goal` | Opens the native Goal dialog to inspect usage and manage the objective, budget, and lifecycle. |
 | `/status` | Shows the model, reasoning effort, runtime state, reported tokens, and available account rate limits. |
 | `/help` | Opens the session actions and discovered skill list. |
 
-`/compact`, `/status`, and `/help` take no arguments. Management commands mentioned in ordinary prose are plain text. Unknown commands are also plain text; `/model` is not implemented.
+`/compact`, `/status`, `/goal`, and `/help` take no arguments in this browser UI. Use the Goal dialog to enter an objective or choose a lifecycle action. Management commands mentioned in ordinary prose are plain text. Unknown commands are also plain text; `/model` is not implemented.
 
 The composer discovers enabled skills through `skills/list`, scoped to the selected session's project directory. Type `$skill-name` or `/skill-name` anywhere in a normal message to explicitly select a discovered skill. Recognized references are highlighted in the input, and matching suggestions can be inserted by clicking or pressing Tab. Bare names remain ordinary text, allowing Codex's own implicit skill selection to work. Escaped markers, backtick code, URLs, and file paths are not treated as explicit references. Duplicate skill names are not automatically resolved.
 
-For example, `Please /review these changes, then use $ui-polish` selects those two skills **if they are present in that project's catalog**. `/review` is a skill alias here, not an invocation of the separate native `review/start` endpoint. The slash aliases `/rename`, `/compact`, `/status`, `/help`, and `/model` are reserved for management commands; use `$name` to reference a skill with one of those names.
+For example, `Please /review these changes, then use $ui-polish` selects those two skills **if they are present in that project's catalog**. `/review` is a skill alias here, not an invocation of the separate native `review/start` endpoint. The slash aliases `/rename`, `/compact`, `/status`, `/goal`, `/help`, and `/model` are reserved for management commands; use `$name` to reference a skill with one of those names.
 
 The bridge revalidates selected skill names against the current project catalog before forwarding a message, queue entry, or steer. It uses the server-discovered skill paths and sends native `skill` input items alongside the original text; client-supplied paths are not accepted. Queued skill attachments survive editing and conversion to steering instructions. A missing, disabled, or ambiguous selected skill produces an error rather than silently sending a message without the selected skill. Use **Session → Refresh skills** after installing a skill; `skills/changed` notifications also trigger rediscovery. If discovery is unsupported, normal text messages still work.
 
@@ -345,6 +370,7 @@ public/                 HTML, CSS, and browser JavaScript modules
   queue.js              Queued messages, editing, and resubmission
   input.js              Shared command and skill-reference recognition
   session-tools.js      Session commands, token status, and skill highlighting
+  goals.js              Native Goal dialog and lifecycle controls
   models.js             Model and reasoning-effort selection for each session
   changes.js            Changes panel, diffs, and resizing
   projects.js           Directory suggestions and new-session dialog
