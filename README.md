@@ -138,6 +138,7 @@ This service runs only the web server. The Codex daemon must have its own startu
 - Searchable, paginated session list with project paths and activity status.
 - Existing active and saved sessions through `thread/resume`, without configuration overrides.
 - Conversation history, streamed responses, code blocks, Markdown tables, command output, file changes, and agent activity. Tables support column alignment and inline formatting, with horizontal scrolling on narrow screens.
+- Task start/end timestamps, live elapsed time, and completed task duration, with clearly labelled browser observation times for live messages.
 - New sessions with project directory suggestions, path validation, and optional directory creation.
 - Persistent Codex message queue with editing, cancellation, and conversion to a steering instruction.
 - Direct steering of an active turn, and interruption of the current turn.
@@ -195,6 +196,21 @@ Steering instructions appear immediately in the conversation with a sending indi
 The conversation also reconciles recent stored history after turn start/completion, accepted direct submissions, and returning to the browser tab. Partial turn updates preserve already observed messages, and background reads preserve drafts. See the [message synchronization review](docs/message-synchronization.md) for the reproduced races, fixes, and recovery limits.
 
 Drafts and text removed from the queue are kept only in the current browser page. Reloading the page discards them; messages still in Codex's queue are retained by Codex.
+
+## Message timestamps and task duration
+
+Each task shows its Codex-reported start/end times and total duration. While a task is running, an elapsed-time estimate updates every second using the browser clock; it waits for reconnection when the browser is disconnected. Completion freezes the duration using `durationMs` from Codex, or the difference between its start/end timestamps when a duration is absent. Interrupted and failed tasks are labelled accordingly.
+
+This is wall-clock task duration, including tool execution, pauses, and approval waits. Time spent queued before the task starts is excluded; the value is not a measure of model inference time alone. Missing or invalid timing data is shown as unavailable rather than estimated from the transcript or the time a session was opened.
+
+The current app-server protocol stores timing per task, not per message. Message headers distinguish the available sources:
+
+- **Started / Ended:** the enclosing task's start/end, beside its first user message and last assistant message respectively. These are task boundaries, not exact per-message creation or streaming-completion times.
+- **Seen:** when this browser first observed an intermediate or steering message in the live event stream. Observation times remain in a bounded, in-memory cache across session switches and reconnects, and are cleared on page reload or logout. They are not written into Codex history.
+- **Sent:** the browser submission time for an optimistic steer while it is awaiting its conversation entry.
+- **—:** the message's time was not recorded, as is common for older intermediate and steering messages.
+
+Clocks use the browser's local time zone and the selected UI language. Hovering a timestamp, or reading its accessible label, provides the full date, time zone, and source explanation. Browser observation and live elapsed times depend on the browser clock and connection latency; completed task timing comes from Codex.
 
 ## Session commands and skills
 

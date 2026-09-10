@@ -4,7 +4,7 @@ import { initQueue } from './queue.js';
 import { initSessionTools } from './session-tools.js';
 import { initModels } from './models.js';
 import { t, initPreferences, showError } from './i18n.js';
-import { createState, mergeTurns, activeTurn, isWorking, applyEvent, restoreHistory, title, project } from './state.js';
+import { createState, mergeTurns, activeTurn, isWorking, applyEvent, restoreHistory, title, project, turnTiming, messageTiming } from './state.js';
 
 const $ = id => document.getElementById(id);
 const state = createState();
@@ -328,13 +328,48 @@ function displayText(text) {
   const value = String(text);
   return value.length > 200000 ? `${value.slice(0, 200000)}\n\n${t('session.truncated')}` : value;
 }
-function renderItem(item) {
+function formatDuration(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000), minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
+  return hours ? t('timing.hours', { hours, minutes: minutes % 60, seconds: seconds % 60 }) : minutes ? t('timing.minutes', { minutes, seconds: seconds % 60 }) : t('timing.seconds', { seconds });
+}
+const timeFormatters = new Map();
+function timeLabel(at, source) {
+  const date = new Date(at), locale = document.documentElement.lang === 'da' ? 'da-DK' : 'en-GB';
+  if (!timeFormatters.has(locale)) timeFormatters.set(locale, [new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }), new Intl.DateTimeFormat(locale, { dateStyle: 'long', timeStyle: 'long' })]);
+  const [clockFormat, fullFormat] = timeFormatters.get(locale);
+  const clock = clockFormat.format(date), full = fullFormat.format(date);
+  const node = el('time', 'message-time', t(`timing.${source}`, { time: clock }));
+  node.dateTime = date.toISOString();
+  node.title = `${full} · ${t(`timing.${source}Hint`)}`;
+  node.setAttribute('aria-label', node.title);
+  return node;
+}
+function renderTurnTiming(turn) {
+  const timing = turnTiming(turn), row = el('div', 'turn-timing'); row.dataset.turnId = turn.id;
+  if (timing.start !== null) row.append(timeLabel(timing.start, 'start'));
+  if (timing.end !== null) row.append(timeLabel(timing.end, 'end'));
+  const duration = el('span', 'turn-duration');
+  duration.title = t(timing.active ? 'timing.elapsedHint' : 'timing.durationHint');
+  row.append(duration);
+  if (timing.active) row.dataset.active = 'true';
+  updateTurnDuration(row, turn);
+  return row;
+}
+function updateTurnDuration(row, turn) {
+  const timing = turnTiming(turn);
+  const label = timing.active ? 'timing.elapsed' : turn.status === 'interrupted' ? 'timing.interrupted' : turn.status === 'failed' ? 'timing.failed' : 'timing.duration';
+  row.querySelector('.turn-duration').textContent = timing.active && !state.connected ? t('timing.disconnected') : timing.duration === null ? t('timing.unknownDuration') : t(label, { duration: formatDuration(timing.duration) });
+}
+function renderItem(item, turn) {
   if (item.type === 'userMessage' || item.type === 'agentMessage') {
     const user = item.type === 'userMessage';
     const wrapper = el('article',`message ${user ? 'user' : 'agent'}`);
     wrapper.dataset.itemId = item.id;
     const label = el('div','message-label');
     label.append(el('span','avatar',user ? t('session.you').slice(0, 1) : '⌘'),document.createTextNode(user ? t('session.you') : 'Codex'));
+    const timing = turn ? messageTiming(state, turn, item) : item.submittedAt != null ? { at: item.submittedAt, source: 'sent' } : null;
+    if (timing) label.append(timeLabel(timing.at, timing.source));
+    else { const unknown = el('span', 'message-time unknown', '—'); unknown.title = t('timing.unknownMessage'); unknown.setAttribute('aria-label', unknown.title); label.append(unknown); }
     wrapper.append(label);
     const text = user ? (item.content || []).filter(c => c.type !== 'skill').map(c => c.text || (c.type === 'image' || c.type === 'localImage' ? t('session.image') : `[${c.type}]`)).join('\n') : item.text || '';
     const questionText = (item.questions || []).map(q => q.title).join('\n');
@@ -373,15 +408,16 @@ function renderMessages(forceBottom = false) {
   if (!state.turns.length) fragment.append(el('div','empty-list',state.loading ? t('session.loadingHistory') : t('session.empty')));
   for (const turn of state.turns) {
     for (const item of turn.items || []) {
-      const node = renderItem(item);
+      const node = renderItem(item, turn);
       if (expanded.has(item.id) && node.tagName === 'DETAILS') node.open = true;
       fragment.append(node);
     }
     if (turn.error) fragment.append(el('div','turn-error', turn.error.message || t('error.codex')));
     if (turn.status === 'interrupted') fragment.append(el('div','turn-marker',t('status.interrupted')));
+    fragment.append(renderTurnTiming(turn));
   }
   for (const item of queue.messages()) {
-    const message = renderItem({ id: `local-steer-${item.id}`, type: 'userMessage', content: item.input });
+    const message = renderItem({ id: `local-steer-${item.id}`, type: 'userMessage', content: item.input, submittedAt: item.submittedAt });
     message.classList.add('pending-steer');
     message.dataset.deliveryState = item.confirmed ? 'accepted' : 'sending';
     const status = el('div', 'delivery-status', t(item.confirmed ? 'queue.steerAccepted' : 'queue.steerSending'));
@@ -517,6 +553,13 @@ $('composer').onsubmit=event=>{event.preventDefault();queue.submit();};
 $('interrupt').onclick=async()=>{const turn=activeTurn(state);if(!turn)return;try{await api(`/api/threads/${encodeURIComponent(state.selectedId)}/interrupt`,{turnId:turn.id});}catch(error){notice(error);}};
 window.addEventListener('hashchange',()=>{const id=new URLSearchParams(location.hash.slice(1)).get('session');if(id&&id!==state.selectedId)openThread(id);});
 document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleHistoryRefresh(); });
+setInterval(() => {
+  if (document.hidden || state.loading) return;
+  for (const row of $('messages').querySelectorAll('.turn-timing[data-active]')) {
+    const turn = state.turns.find(turn => turn.id === row.dataset.turnId);
+    if (turn) updateTurnDuration(row, turn);
+  }
+}, 1000);
 setInterval(()=>{if(state.connected&&!document.hidden&&!state.loading)loadThreads().catch(()=>{});},30000);
 const changes = initChanges({ api, getState: () => state });
 const sessionTools = initSessionTools({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text) });

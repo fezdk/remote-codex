@@ -1,5 +1,25 @@
 export function createState() {
-  return { threads: [], selectedId: null, thread: null, turns: [], requests: new Map(), connected: false, loading: false, ready: false, snapshotSequence: 0 };
+  return { threads: [], selectedId: null, thread: null, turns: [], requests: new Map(), messageTimes: new Map(), connected: false, loading: false, ready: false, snapshotSequence: 0 };
+}
+
+export function timestampMs(seconds) {
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0 && seconds <= 8640000000000 ? seconds * 1000 : null;
+}
+export function turnTiming(turn, now = Date.now()) {
+  const start = timestampMs(turn.startedAt), end = timestampMs(turn.completedAt);
+  const active = turn.status === 'inProgress';
+  const reported = typeof turn.durationMs === 'number' && Number.isFinite(turn.durationMs) && turn.durationMs >= 0 && turn.durationMs <= Number.MAX_SAFE_INTEGER ? turn.durationMs : null;
+  const duration = active ? start !== null && Number.isFinite(now) && now >= start ? now - start : null
+    : reported ?? (start !== null && end !== null && end >= start ? end - start : null);
+  return { start, end: active ? null : end, duration, active, estimated: active || reported === null };
+}
+const messageTimeKey = (threadId, turnId, itemId) => JSON.stringify([threadId, turnId, itemId]);
+export function messageTiming(state, turn, item) {
+  const timing = turnTiming(turn), items = turn.items || [];
+  if (item.type === 'userMessage' && items.find(i => i.type === 'userMessage')?.id === item.id && timing.start !== null) return { at: timing.start, source: 'start' };
+  if (item.type === 'agentMessage' && items.findLast(i => i.type === 'agentMessage')?.id === item.id && timing.end !== null) return { at: timing.end, source: 'end' };
+  const at = state.messageTimes.get(messageTimeKey(state.selectedId, turn.id, item.id));
+  return at === undefined ? null : { at, source: 'received' };
 }
 
 // Turn notifications can contain only some items. Merge by ID without discarding
@@ -21,12 +41,13 @@ export function mergeTurns(existing, incoming) {
   for (const turn of incoming) {
     const old = map.get(turn.id);
     const merged = { ...old, ...turn, items: mergeItems(old?.items, turn.items, turn.itemsView === 'summary') };
+    for (const field of ['startedAt', 'completedAt', 'durationMs']) if (merged[field] == null && old?.[field] != null) merged[field] = old[field];
     if (old && ['completed', 'interrupted', 'failed'].includes(old.status) && turn.status === 'inProgress') {
       for (const field of ['status', 'error', 'completedAt', 'durationMs']) merged[field] = old[field];
     }
     map.set(turn.id, merged);
   }
-  return [...map.values()].sort((a,b) => (a.startedAt ?? 0) - (b.startedAt ?? 0) || a.id.localeCompare(b.id));
+  return [...map.values()].sort((a,b) => (a.startedAt ?? a.observedStartedAt ?? 0) - (b.startedAt ?? b.observedStartedAt ?? 0) || a.id.localeCompare(b.id));
 }
 
 // A start acknowledgement can follow live items or even turn completion.
@@ -71,6 +92,7 @@ export function createSteerTracker() {
   }
   return {
     track(threadId, entry, turns) {
+      entry.submittedAt ??= Date.now();
       reconcile(threadId, turns);
       if (!seen.has(threadId)) seen.set(threadId, new Set());
       existingItems.set(entry, new Set(turns.flatMap(turn => (turn.items || []).filter(item => item.type === 'userMessage').map(item => key(turn.id, item.id)))));
@@ -106,6 +128,14 @@ export function applyEvent(state, message) {
   if (message.id !== undefined) {
     state.requests.set(JSON.stringify(message.id), message);
     return;
+  }
+  const timedItemId = ['item/started', 'item/completed'].includes(message.method) && ['userMessage', 'agentMessage'].includes(p.item?.type) ? p.item.id : message.method === 'item/agentMessage/delta' ? p.itemId : null;
+  if (p.threadId && p.turnId && timedItemId && !(message.bridgeSequence <= state.snapshotSequence)) {
+    const key = messageTimeKey(p.threadId, p.turnId, timedItemId);
+    if (!state.messageTimes.has(key)) {
+      state.messageTimes.set(key, Date.now());
+      if (state.messageTimes.size > 5000) state.messageTimes.delete(state.messageTimes.keys().next().value);
+    }
   }
   if (message.method === 'serverRequest/resolved') state.requests.delete(JSON.stringify(p.requestId));
   if (message.method === 'thread/started') {
@@ -148,7 +178,7 @@ export function applyEvent(state, message) {
   }
   if (p.turnId && (message.method.startsWith('item/') || message.method === 'error')) {
     let turn = state.turns.find(t => t.id === p.turnId);
-    if (!turn) { turn = { id: p.turnId, status: 'inProgress', items: [], startedAt: Date.now()/1000 }; state.turns.push(turn); }
+    if (!turn) { turn = { id: p.turnId, status: 'inProgress', items: [], startedAt: null, observedStartedAt: Date.now()/1000 }; state.turns.push(turn); }
     if (p.item) {
       const index = turn.items.findIndex(item => item.id === p.item.id);
       if (index < 0) turn.items.push(p.item);
