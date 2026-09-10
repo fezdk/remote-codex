@@ -32,7 +32,7 @@ The real interface with fictional projects, conversations, and code changes. No 
 
 ## Requirements
 
-- Node.js **18.19 or later** and npm.
+- An updated, maintained **Node.js LTS release** and npm. The application has a technical minimum of 18.19, but new service installations require Node 22+ LTS; Node 18 and 20 are no longer maintained upstream.
 - A running Codex app-server daemon with an already configured Codex account.
 - Git for the Git changes tab and Git-related tests.
 - A modern browser. Browser tests use Chromium through Playwright.
@@ -66,20 +66,60 @@ Stop the web server with Ctrl+C. The Codex daemon and its work continue running.
 
 ## Background service on Linux
 
-Use the [systemd user-service template](deploy/remote-codex.service) to keep the web server running independently of a terminal, start it at boot, and restart it after a failure.
+The setup utility generates a systemd **user service** from the [service template](deploy/remote-codex.service). It locates this checkout automatically, selects Node from your current `PATH` or `--node`, validates that runtime and the installed dependencies, and writes explicit absolute paths into the local service file.
 
-1. Copy the template to `~/.config/systemd/user/remote-codex.service`, creating that directory if needed.
-2. Replace both occurrences of `/path/to/remote-codex` in the service settings with your checkout's absolute path. Verify that `/usr/bin/node` is the intended Node executable.
-3. Optionally put environment settings in `.remote-codex/service.env`, with permissions `0600`. Use systemd environment-file syntax (`NAME=value`, without `export` or shell commands). This private file is ignored by Git and is loaded only by the service.
-4. Stop any manually started web server using the same port, then run:
+Run setup as the same account that owns your Codex sessions, without `sudo`. Install dependencies with `npm ci` first. Preview the configuration:
 
 ```bash
-systemctl --user daemon-reload
-systemctl --user enable --now remote-codex.service
+npm run setup -- --dry-run
+
+# Choose a separately installed Node instead of the first node in PATH:
+npm run setup -- --node /opt/node/bin/node --dry-run
+```
+
+For a first installation, install, enable, and start the service with:
+
+```bash
+npm run setup -- --node /opt/node/bin/node --start
+```
+
+Omit `--node` to use the first `node` in `PATH`. Replace the example path with an actual, persistent installation. Setup prints the selected executable and version. It does not search caches, download Node, install npm dependencies, generate credentials, or start the Codex daemon.
+
+The installer requires a maintained **Node LTS release, 22 or newer**. It rejects pre-LTS builds and expired release lines using a bundled lifecycle schedule; currently Node 22 and 24 are suitable lines. Use an updated patch release: validation is not an online security-advisory scan. The setup script itself can run under the application's older minimum Node version so that it can select a newer executable with `--node`. See the [Node release schedule](https://nodejs.org/en/about/previous-releases).
+
+| Option | Behavior |
+| --- | --- |
+| `--node PATH` | Select the Node executable; otherwise use the first one in `PATH`. |
+| `--dry-run` | Validate dependencies and show the generated unit, without writing files or invoking systemd/loginctl. |
+| `--replace` | Allow replacing a different existing service file; save its previous contents in a private backup alongside it. |
+| `--start` | Start the service after installation. An already running service is not restarted. |
+| `--restart` | Explicitly restart after installation to apply changed runtime/settings. Browser connections and logins are interrupted. |
+| `--enable-linger` | Enable this user's service manager at boot and after logout; may require administrator authorization. |
+| `--help` | Show usage. |
+
+Without `--start` or `--restart`, setup installs the unit, reloads systemd's unit configuration, and enables startup, leaving the current process untouched. Repeating setup with identical settings does not rewrite the file. To update an existing installation's Node path:
+
+```bash
+npm run setup -- --node /opt/node/bin/node --dry-run
+npm run setup -- --node /opt/node/bin/node --replace
+
+# Run when you are ready to disconnect browsers and apply the new unit:
+systemctl --user restart remote-codex.service
+```
+
+The generated unit is stored under `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/remote-codex.service`, with mode `0600`. Backups also use `0600`. Existing symlinked, hardlinked, or foreign-owned unit files are refused. If a systemd command fails, setup reports the failed step and exits nonzero; any already installed unit remains available for inspection and retry. It does not silently restart or roll back a running service. Existing systemd drop-ins remain in effect, so review them with `systemctl --user cat remote-codex.service` if they override settings.
+
+Optional application settings belong in `.remote-codex/service.env`, with permissions `0600`. Use systemd environment-file syntax (`NAME=value`, without `export` or shell commands). The private file is ignored by Git and is loaded only by the service. Setup does not read or overwrite its contents. The Node executable is configured in the service's `ExecStart`, not in this environment file.
+
+For boot startup before login and continued operation after logout, run setup with `--enable-linger`, or enable lingering separately:
+
+```bash
 loginctl enable-linger "$(id -un)"
 ```
 
-Enabling lingering allows the user's service manager to start at boot and continue after logout. This changes the lifetime of the user's service manager, not just this one service, and may require administrator authorization on some systems. No crontab entry is needed.
+Lingering changes the lifetime of the user's service manager, including other enabled user services. No crontab entry is needed. Stop any manually started web server using the same port before starting the service.
+
+The manual template remains available if you prefer to install it yourself. Project paths with spaces, quotes, dollar signs and percent signs are supported. Control characters, backslashes, glob characters, and trailing whitespace in project paths are rejected; systemd also rejects quotes and backslashes in the Node executable path. Shell configuration files such as `.bashrc` are not sourced by setup or the generated service.
 
 Manage the service with:
 
@@ -304,7 +344,7 @@ server/
   projects.js           Directory lookup, validation, and explicit creation
   session-tools.js      Validated session actions, skill resolution, and token snapshots
 test/                   Unit, integration, and browser tests
-scripts/                Reproducible README screenshot capture
+scripts/                Systemd service setup and reproducible screenshot capture
 docs/                   Code audit, architecture research, references, and demo screenshots
 ```
 
@@ -370,4 +410,4 @@ This client connects to the daemon you configure. A session running in a separat
 
 Existing approval policies and reviewers remain in effect. Requests handled by automatic review or another client are not converted into browser approvals. Extended permission grants, MCP elicitation, dynamic client tools, and other unsupported server requests are referred to the original client.
 
-Uploads, voice, an interactive terminal, and full official-app parity are not implemented. Markdown rendering supports text, links, bold text, inline code, and code blocks. There is no hosted relay, device-pairing service, automatic deployment, or installed system service. `package.json` uses `private: true` to prevent accidental npm publication; this does not prevent a public GitHub repository.
+Uploads, voice, an interactive terminal, and full official-app parity are not implemented. Markdown rendering supports text, links, bold text, inline code, and code blocks. There is no hosted relay, device-pairing service, automatic deployment, or automatic service installation during `npm start`. Linux user-service installation is available through `npm run setup`. `package.json` uses `private: true` to prevent accidental npm publication; this does not prevent a public GitHub repository.
