@@ -10,14 +10,14 @@ The [code audit](docs/code-audit.md) records the security and correctness review
 
 The real interface with fictional projects, conversations, and code changes. No personal session data or credentials are shown.
 
-**Dark theme — chat, queued instructions, and Codex file changes side by side.**
-
-![Remote Codex in dark mode, showing a demo conversation, message queue, and a colored code diff](docs/screenshots/desktop-dark.png)
-
-<details>
-<summary>Light theme and Git changes</summary>
+**Light theme — chat, queued instructions, and Git changes side by side.**
 
 ![Remote Codex in light mode with the Git changes tab and an unstaged diff](docs/screenshots/desktop-light.png)
+
+<details>
+<summary>Dark theme and Codex file changes</summary>
+
+![Remote Codex in dark mode, showing a demo conversation, message queue, and a colored code diff](docs/screenshots/desktop-dark.png)
 
 </details>
 
