@@ -1,12 +1,12 @@
 import { t, errorText } from './i18n.js';
-import { activeTurn, isWorking, applyEvent, createSteerTracker } from './state.js';
+import { activeTurn, isWorking, acceptTurn, createSteerTracker } from './state.js';
 const $ = id => document.getElementById(id);
 const textOf = item => (item.input || []).filter(part => part.type === 'text').map(part => part.text).join('\n');
 const textOnly = item => item.input?.some(part => part.type === 'text') && item.input.every(part => ['text', 'skill'].includes(part.type));
 const node = (tag, cls, text) => { const el = document.createElement(tag); el.className = cls; if (text != null) el.textContent = text; return el; };
 const clientId = () => [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, '0')).join('');
 
-export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraft, skillsFor = () => [], handleCommand = () => false, isSettingsBusy = () => false }) {
+export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraft, skillsFor = () => [], handleCommand = () => false, isSettingsBusy = () => false, refreshHistory = () => {} }) {
   let threadId, items = [], revision = 0, generation = 0, failure, more = false, timer;
   const pending = new Map(), failed = new Map(), editing = new Map(), busy = new Set();
   const steers = createSteerTracker();
@@ -132,7 +132,8 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
       editing.delete(id);
       if (threadId === id) {
         if ($('message').value === text) $('message').value = '';
-        if (response.turn && !state.turns.some(t => t.id === response.turn.id)) applyEvent(state, { method: 'turn/started', params: { threadId: id, turn: response.turn } });
+        if (response.turn) acceptTurn(state, response.turn);
+        if (!queue) refreshHistory();
         $('message').focus();
       }
     } catch (error) {

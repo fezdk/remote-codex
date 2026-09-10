@@ -150,6 +150,8 @@ Replacing an unsent draft retains its text in a recovery card. **Restore message
 
 Steering instructions appear immediately in the conversation with a sending indicator. After acceptance, the text stays visible until Codex records the matching message in its conversation history. This also applies when converting a queued message to a steer. Multiple pending steers remain visible across session switches and are reconciled individually, including identical text. Arrow Up can recall an accepted steer while its history event is still pending. These temporary display entries live only in the current page and are cleared by reload or logout; they do not change or replay Codex messages.
 
+The conversation also reconciles recent stored history after turn start/completion, accepted direct submissions, and returning to the browser tab. Partial turn updates preserve already observed messages, and background reads preserve drafts. See the [message synchronization review](docs/message-synchronization.md) for the reproduced races, fixes, and recovery limits.
+
 Drafts and text removed from the queue are kept only in the current browser page. Reloading the page discards them; messages still in Codex's queue are retained by Codex.
 
 ## Session commands and skills

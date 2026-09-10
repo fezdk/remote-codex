@@ -10,6 +10,7 @@ const $ = id => document.getElementById(id);
 const state = createState();
 let events, streamWatchdog, nextCursor, turnsCursor, openVersion = 0, listVersion = 0, searchTimer, renderFrame;
 let bufferedEvents = [], requestSignature = '', defaultCwd = '', draftId;
+let historyRefresh, historyTimer;
 const drafts = new Map();
 const requestCards = new Map();
 let authEpoch = 0;
@@ -52,6 +53,7 @@ function showLogin() {
   for (const controller of inFlight) controller.abort();
   events?.close(); events = null;
   clearTimeout(streamWatchdog);
+  clearTimeout(historyTimer); historyRefresh = null;
   ++openVersion; ++listVersion;
   clearTimeout(searchTimer); cancelAnimationFrame(renderFrame); renderFrame = null;
   defaultCwd = ''; nextCursor = null; turnsCursor = null;
@@ -115,7 +117,9 @@ function connectEvents() {
   listen('codex', event => {
     const message = JSON.parse(event.data);
     if (state.loading) bufferedEvents.push(message);
+    if (historyRefresh) historyRefresh.events.push(message);
     applyEvent(state, message); changes.event(message); queue.event(message); sessionTools.event(message); models.event(message);
+    if (message.params?.threadId === state.selectedId && ['turn/started', 'turn/completed'].includes(message.method)) scheduleHistoryRefresh();
     if (message.method === 'bridge/subscriptionError' && message.params.threadId === state.selectedId) notice(message.params.message);
     scheduleRender();
   });
@@ -179,6 +183,7 @@ async function openThread(id, resyncing = false) {
   draftId = id;
   $('message').value = drafts.get(id) || '';
   const version = ++openVersion;
+  clearTimeout(historyTimer); historyRefresh = null;
   state.selectedId = id; state.loading = true; state.ready = false; bufferedEvents = [];
   history.replaceState(null, '', `#session=${encodeURIComponent(id)}`);
   if (!resyncing || state.thread?.id !== id) { state.turns = []; state.thread = state.threads.find(t => t.id === id) || { id }; }
@@ -201,6 +206,28 @@ async function openThread(id, resyncing = false) {
     if (version === openVersion) notice(error);
   } finally {
     if (version === openVersion) { state.loading = false; renderAll(!resyncing); }
+  }
+}
+
+// Heal missed item notifications from persisted history without reopening the
+// session, clearing a draft, changing pagination, or replaying a submission.
+function scheduleHistoryRefresh() {
+  clearTimeout(historyTimer);
+  historyTimer = setTimeout(refreshRecentHistory, 250);
+}
+async function refreshRecentHistory() {
+  if (!state.ready || state.loading || !state.connected || !state.selectedId) return;
+  if (historyRefresh) { historyRefresh.again = true; return; }
+  const refresh = historyRefresh = { version: openVersion, id: state.selectedId, events: [] };
+  try {
+    const page = await api(`/api/threads/${encodeURIComponent(refresh.id)}/turns`);
+    if (historyRefresh !== refresh || refresh.version !== openVersion) return;
+    restoreHistory(state, mergeTurns(state.turns, [...page.data].reverse()), refresh.events, page.bridgeSequence);
+    renderMessages(); renderControls();
+  } catch (error) {
+    if (historyRefresh === refresh && refresh.version === openVersion) notice(error);
+  } finally {
+    if (historyRefresh === refresh) { historyRefresh = null; if (refresh.again) scheduleHistoryRefresh(); }
   }
 }
 function setSidebar(open) {
@@ -310,7 +337,10 @@ function renderItem(item) {
     label.append(el('span','avatar',user ? t('session.you').slice(0, 1) : '⌘'),document.createTextNode(user ? t('session.you') : 'Codex'));
     wrapper.append(label);
     const text = user ? (item.content || []).filter(c => c.type !== 'skill').map(c => c.text || (c.type === 'image' || c.type === 'localImage' ? t('session.image') : `[${c.type}]`)).join('\n') : item.text || '';
-    wrapper.append(user ? el('div','message-body',displayText(text)) : markdown(text));
+    const questionText = (item.questions || []).map(q => q.title).join('\n');
+    // Async questions may repeat their titles verbatim in the agent's text.
+    // Keep the question cards once, preserving any separate surrounding prose.
+    if (user || !questionText || text.trim() !== questionText.trim()) wrapper.append(user ? el('div','message-body',displayText(text)) : markdown(text));
     const skills = user && (item.content || []).filter(c => c.type === 'skill').map(c => c.name);
     if (skills?.length) wrapper.append(el('div', 'delivery-status', t('tools.selectedSkills', { names: skills.join(', ') })));
     for (const q of item.questions || []) {
@@ -486,11 +516,12 @@ $('message').onkeydown=event=>{if(sessionTools.keydown(event))return;queue.keydo
 $('composer').onsubmit=event=>{event.preventDefault();queue.submit();};
 $('interrupt').onclick=async()=>{const turn=activeTurn(state);if(!turn)return;try{await api(`/api/threads/${encodeURIComponent(state.selectedId)}/interrupt`,{turnId:turn.id});}catch(error){notice(error);}};
 window.addEventListener('hashchange',()=>{const id=new URLSearchParams(location.hash.slice(1)).get('session');if(id&&id!==state.selectedId)openThread(id);});
+document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleHistoryRefresh(); });
 setInterval(()=>{if(state.connected&&!document.hidden&&!state.loading)loadThreads().catch(()=>{});},30000);
 const changes = initChanges({ api, getState: () => state });
 const sessionTools = initSessionTools({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text) });
 const models = initModels({ api, getState: () => state, renderApp: renderAll, notice, isQueueBusy: () => queue.isBusy() });
-const queue = initQueue({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text), skillsFor: sessionTools.skillsFor, handleCommand: sessionTools.submit, isSettingsBusy: models.busy });
+const queue = initQueue({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text), skillsFor: sessionTools.skillsFor, handleCommand: sessionTools.submit, isSettingsBusy: models.busy, refreshHistory: scheduleHistoryRefresh });
 const projects = initProjects({ api, getDefaultCwd: () => state.thread?.cwd || defaultCwd, onCreated: async result => { await loadThreads().catch(notice); await openThread(result.thread.id); } });
 initPreferences(() => { renderConnection(); renderAll(); changes.render(); projects.render(); });
 enter().catch(()=>showLogin());

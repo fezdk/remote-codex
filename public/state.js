@@ -2,10 +2,37 @@ export function createState() {
   return { threads: [], selectedId: null, thread: null, turns: [], requests: new Map(), connected: false, loading: false, ready: false, snapshotSequence: 0 };
 }
 
+// Turn notifications can contain only some items. Merge by ID without discarding
+// streamed messages, and insert newly loaded history before its next known item.
+function mergeItems(existing = [], incoming = [], summary = false) {
+  const known = new Map(existing.map(item => [item.id, item]));
+  const before = new Map(); let additions = [];
+  for (const item of incoming) {
+    if (!known.has(item.id)) { additions.push(item); continue; }
+    before.set(item.id, [...before.get(item.id) || [], ...additions]); additions = [];
+    const old = known.get(item.id);
+    known.set(item.id, summary ? { ...item, ...old } : { ...old, ...item });
+  }
+  return existing.flatMap(item => [...before.get(item.id) || [], known.get(item.id)]).concat(additions);
+}
+
 export function mergeTurns(existing, incoming) {
   const map = new Map(existing.map(turn => [turn.id, turn]));
-  for (const turn of incoming) map.set(turn.id, { ...map.get(turn.id), ...turn });
+  for (const turn of incoming) {
+    const old = map.get(turn.id);
+    const merged = { ...old, ...turn, items: mergeItems(old?.items, turn.items, turn.itemsView === 'summary') };
+    if (old && ['completed', 'interrupted', 'failed'].includes(old.status) && turn.status === 'inProgress') {
+      for (const field of ['status', 'error', 'completedAt', 'durationMs']) merged[field] = old[field];
+    }
+    map.set(turn.id, merged);
+  }
   return [...map.values()].sort((a,b) => (a.startedAt ?? 0) - (b.startedAt ?? 0) || a.id.localeCompare(b.id));
+}
+
+// A start acknowledgement can follow live items or even turn completion.
+export function acceptTurn(state, turn) {
+  const live = state.turns.find(candidate => candidate.id === turn.id);
+  state.turns = mergeTurns(state.turns.filter(candidate => candidate.id !== turn.id), mergeTurns([turn], live ? [live] : []));
 }
 
 export function activeTurn(state) {
@@ -58,7 +85,7 @@ export function createSteerTracker() {
 // RPC arrival order is not a snapshot watermark. Terminal events may precede a stale RPC reply.
 export function restoreHistory(state, snapshot, events, responseSequence = 0) {
   const live = state.turns;
-  state.turns = mergeTurns([], snapshot);
+  state.turns = mergeTurns(live.filter(turn => snapshot.some(candidate => candidate.id === turn.id)), snapshot);
   state.snapshotSequence = responseSequence;
   for (const event of events) {
     if (event.id !== undefined) continue;
