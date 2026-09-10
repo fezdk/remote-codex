@@ -6,6 +6,8 @@ This is an independent, experimental project, not an official OpenAI product or 
 
 The [code audit](docs/code-audit.md) records the security and correctness review, fixes, regression tests, and remaining limitations.
 
+The [web server security review](docs/security-review-2026-09-10.md) covers authentication bypass checks, HTTP input handling, file exposure, dependency advisories, and deployment limitations.
+
 ## Screenshots
 
 The real interface with fictional projects, conversations, and code changes. No personal session data or credentials are shown.

@@ -30,6 +30,8 @@ A related display issue was confirmed separately: an asynchronous question can a
 
 State regressions cover partial completion, lagging history, terminal-state preservation, late acknowledgements, item ordering, and overlapping text deltas. Browser regressions cover missing item recovery, drafts, session changes during a read, reload, and asynchronous question rendering. Existing queue, steer, approval, model, and rendering tests remain applicable.
 
+At commit `b5d258a`, syntax checks, all 38 Node tests, and all 35 browser tests passed. A read-only browser check against the running installation displayed the reported user message exactly once and the asynchronous question exactly once, with no JavaScript errors. The webserver process remained unchanged; this frontend update required no service restart.
+
 History recovery depends on the app-server eventually returning the message in `thread/turns/list`. It cannot reconstruct a message absent from both the event stream and stored history. An accepted optimistic steer is still stored only in page memory until the server records it; reloading before persistence can temporarily remove that local display entry. Recovery fetches the most recent page; older history remains available through the existing pagination controls.
 
 The protocol is experimental and version dependent. OpenAI's [app-server documentation](https://learn.chatgpt.com/docs/app-server#list-thread-turns) describes full, summary, and omitted turn-item views; the implementation was checked against the locally installed protocol types.
