@@ -71,6 +71,7 @@ function setConnection(status) {
   state.connected = status.state === 'connected';
   if (!state.connected) { state.ready = false; ++openVersion; state.loading = false; bufferedEvents = []; state.requests.clear(); renderRequests(); }
   renderConnection();
+  renderList();
   renderControls();
 }
 function renderConnection() {
@@ -112,7 +113,7 @@ function connectEvents() {
   });
   listen('pending', event => {
     state.requests = new Map(JSON.parse(event.data).map(r => [JSON.stringify(r.id), r]));
-    renderRequests();
+    renderRequests(); renderList();
   });
   listen('resync', () => resync());
   listen('codex', event => {
@@ -169,10 +170,25 @@ function renderList() {
     const button = el('button', `session-row${state.selectedId === thread.id ? ' selected' : ''}`);
     button.setAttribute('aria-current', state.selectedId === thread.id ? 'true' : 'false');
     button.title = `${sessionTitle(thread)}\n${thread.cwd}`;
-    button.append(el('div','session-row-title',sessionTitle(thread)));
+    const selected = state.selectedId === thread.id;
+    const status = selected && state.thread?.id === thread.id ? state.thread.status : thread.status;
+    const waiting = status?.type === 'active' && status.activeFlags?.some(flag => ['waitingOnApproval', 'waitingOnUserInput'].includes(flag))
+      || [...state.requests.values()].some(request => request.params?.threadId === thread.id);
+    const working = status?.type === 'active' || selected && isWorking(state);
+    const activity = waiting || working ? !state.connected ? 'unknown' : waiting ? 'waiting' : 'working' : null;
+    const heading = el('div', 'session-row-heading');
+    heading.append(el('div', 'session-row-title', sessionTitle(thread)));
+    if (activity) {
+      button.dataset.activity = activity;
+      const badge = el('span', 'session-activity'); badge.title = t(`list.${activity}Hint`);
+      const dot = el('span', 'session-activity-dot'); dot.setAttribute('aria-hidden', 'true');
+      badge.append(dot, document.createTextNode(t(`list.${activity}`))); heading.append(badge);
+      button.title += `\n${badge.title}`;
+    }
+    button.append(heading);
     const meta = el('div','session-row-meta');
-    const waiting = thread.status?.activeFlags?.length;
-    meta.append(el('span', `status-dot ${waiting ? 'waiting' : thread.status?.type === 'active' ? 'active' : ''}`), el('span','path-short',projectTitle(thread.cwd)),el('time','',ago(thread.updatedAt)));
+    const dot = el('span', 'status-dot'); dot.setAttribute('aria-hidden', 'true');
+    meta.append(dot, el('span','path-short',projectTitle(thread.cwd)),el('time','',ago(thread.updatedAt)));
     button.append(meta); button.onclick = () => openThread(thread.id);
     fragment.append(button);
   }
