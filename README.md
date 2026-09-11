@@ -2,7 +2,7 @@
 
 A browser interface for your existing local Codex sessions. A small Node.js server connects directly to your running Codex app-server daemon, so you can follow conversations, send instructions, handle approvals, and review changes from another computer. Codex continues working on its host machine with its existing account and configuration.
 
-This is an independent, experimental project, not an official OpenAI product or an integration into chatgpt.com. It focuses on Codex. The [T3 Code research notes](docs/t3-code-research.md) (in Danish) explain the architecture comparison behind that choice.
+This is an independent, experimental project, not an official OpenAI product or an integration into chatgpt.com. It focuses on Codex.
 
 The [code audit](docs/code-audit.md) records the security and correctness review, fixes, regression tests, and remaining limitations.
 
@@ -389,7 +389,7 @@ server/
   session-tools.js      Validated session actions, skill resolution, and token snapshots
 test/                   Unit, integration, and browser tests
 scripts/                Systemd service setup and reproducible screenshot capture
-docs/                   Code audit, architecture research, references, and demo screenshots
+docs/                   Code audit, references, and demo screenshots
 ```
 
 ## Architecture and protocol
