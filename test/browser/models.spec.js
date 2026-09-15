@@ -53,6 +53,7 @@ test('a newer settings event wins over a delayed acknowledgement and sending wai
 test('failed catalog and settings requests retain current values, allow retry and fit mobile in both languages', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 });
   await login(page);
+  await page.locator('#composer-options-toggle').click();
   await page.locator('#message').fill('Preserved on failure');
   await page.route('**/session-one/settings', route => route.request().method() === 'POST' ? route.fulfill({ status: 409, json: { error: 'Synthetic catalog change', errorKey: 'models.unavailable' } }) : route.continue());
   await page.locator('#model-select').selectOption('demo-fast');
@@ -64,6 +65,7 @@ test('failed catalog and settings requests retain current values, allow retry an
   await page.unroute('**/session-one/settings');
   await page.route('**/api/models', route => route.fulfill({ status: 503, json: { error: 'Synthetic catalog failure' } }));
   await page.reload(); await expect(page.locator('#models-status')).toContainText('Model-listen kunne ikke hentes');
+  await page.locator('#composer-options-toggle').click();
   await expect(page.locator('#model-select')).toBeDisabled(); await expect(page.locator('#model-select')).toHaveValue('local-model');
   await page.unroute('**/api/models'); await page.locator('#models-refresh').click(); await expect(page.locator('#model-select')).toBeEnabled();
   await page.locator('#workspace [data-language-select]').selectOption('en');

@@ -2,6 +2,8 @@
 export const languages = { da: 'Dansk', en: 'English' };
 export const messages = {
   da: {
+    "composer.options": "Vis eller skjul model, effort og Goal",
+    "composer.nextMessage": "Næste besked…",
     "goals.objective": "Opgave og kriterier for færdiggørelse",
     "goals.budget": "Tokenbudget",
     "goals.budgetHint": "Tomt felt betyder intet tokenbudget. Forbruget kommer fra Codex-serveren.",
@@ -363,6 +365,8 @@ export const messages = {
     'error.noPending': 'Anmodningen afventer ikke længere svar. Den kan være besvaret i en anden klient.',
   },
   en: {
+    "composer.options": "Show or hide model, effort and Goal",
+    "composer.nextMessage": "Next message…",
     "goals.objective": "Objective and completion criteria",
     "goals.budget": "Token budget",
     "goals.budgetHint": "Leave blank for no token budget. Usage is reported by the Codex server.",

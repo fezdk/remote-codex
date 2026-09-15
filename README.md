@@ -155,6 +155,8 @@ This service runs only the web server. The Codex daemon must have its own startu
 
 The session list marks active sessions with a green edge and a **Working** badge, and sessions awaiting approval or input with an amber **Needs input** badge. Activity is based on Codex runtime state and pending requests, including sessions other than the open chat. The open chat also uses its current turn state. Live status events update the badges; the existing 30-second session refresh picks up other server-reported changes. A disconnected browser shows previously active sessions as **Unknown**, without animation. Both themes and languages are supported, and the activity pulse respects reduced-motion preferences.
 
+On phones, the message field starts at one line, grows with your draft, and scrolls internally for longer text. Model, effort, and Goal controls sit behind the **Model · Goal** toggle; send, steer, and stop remain directly accessible. Compact headers and spacing leave more room for chat. The layout follows the browser's visible viewport as the on-screen keyboard opens, and keeps the newest message in view when you were already at the bottom. Warnings, queued messages, and approval requests remain accessible.
+
 ## Goal controls
 
 The **Goal** button beside the model and effort selectors opens the selected session's native Goal. The feature name stays **Goal** in every UI language; descriptions and actions follow your language setting. `/goal` opens the same dialog.

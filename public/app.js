@@ -446,6 +446,33 @@ function renderMessages(forceBottom = false) {
   $('activity').hidden = !state.connected || !isWorking(state);
   timeline.scrollTop = bottom ? timeline.scrollHeight : scrollTop;
 }
+const mobileComposer = window.matchMedia('(max-width: 760px)');
+let composerSize = {};
+function resizeComposer() {
+  const input = $('message'), width = input.clientWidth;
+  if (!width) return;
+  const mobile = mobileComposer.matches;
+  const viewport = window.visualViewport?.height || window.innerHeight;
+  const maximum = mobile ? Math.max(64, Math.min(144, Math.floor(viewport * .28))) : 180;
+  if (composerSize.text === input.value && composerSize.width === width && composerSize.maximum === maximum && composerSize.mobile === mobile) return;
+  const timeline = $('timeline');
+  const pinned = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 100;
+  const scroll = input.scrollTop;
+  input.style.height = '0px';
+  input.style.height = `${Math.min(maximum, Math.max(mobile ? 42 : 66, input.value ? input.scrollHeight : 0))}px`;
+  input.style.overflowY = input.value && input.scrollHeight > input.clientHeight ? 'auto' : 'hidden';
+  input.scrollTop = scroll;
+  if (pinned) timeline.scrollTop = timeline.scrollHeight;
+  composerSize = { text: input.value, width, maximum, mobile };
+}
+function updateComposerViewport() {
+  const timeline = $('timeline');
+  const pinned = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 100;
+  const viewport = window.visualViewport;
+  if (!viewport || viewport.scale === 1) document.documentElement.style.setProperty('--mobile-height', `${Math.round(viewport?.height || innerHeight)}px`);
+  resizeComposer();
+  if (pinned) timeline.scrollTop = timeline.scrollHeight;
+}
 function renderControls() {
   const active = activeTurn(state);
   const working = isWorking(state);
@@ -465,6 +492,8 @@ function renderControls() {
   $('input-warning').textContent = t('session.noInput');
   $('send-mode').textContent = active ? t('session.steer') : t('session.defaults');
   queue.render();
+  if (mobileComposer.matches && working) $('message').placeholder = t('composer.nextMessage');
+  resizeComposer();
   sessionTools.render();
   models.render(); goals.render();
 }
@@ -566,6 +595,10 @@ $('new-session').onclick = () => projects.open();
 $('welcome-new').onclick = () => projects.open();
 $('message').oninput=()=>{drafts.set(state.selectedId,$('message').value);renderControls();};
 $('message').onkeydown=event=>{if(sessionTools.keydown(event))return;queue.keydown(event);if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('send').disabled)$('composer').requestSubmit();}};
+$('composer-options-toggle').onclick = () => {
+  const open = $('composer').classList.toggle('options-open');
+  $('composer-options-toggle').setAttribute('aria-expanded', String(open));
+};
 $('composer').onsubmit=event=>{event.preventDefault();queue.submit();};
 $('interrupt').onclick=async()=>{const turn=activeTurn(state);if(!turn)return;try{await api(`/api/threads/${encodeURIComponent(state.selectedId)}/interrupt`,{turnId:turn.id});}catch(error){notice(error);}};
 window.addEventListener('hashchange',()=>{const id=new URLSearchParams(location.hash.slice(1)).get('session');if(id&&id!==state.selectedId)openThread(id);});
@@ -585,4 +618,8 @@ const models = initModels({ api, getState: () => state, renderApp: renderAll, no
 const queue = initQueue({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text), skillsFor: sessionTools.skillsFor, handleCommand: sessionTools.submit, isSettingsBusy: models.busy, refreshHistory: scheduleHistoryRefresh });
 const projects = initProjects({ api, getDefaultCwd: () => state.thread?.cwd || defaultCwd, onCreated: async result => { await loadThreads().catch(notice); await openThread(result.thread.id); } });
 initPreferences(() => { renderConnection(); renderAll(); changes.render(); projects.render(); });
+new ResizeObserver(resizeComposer).observe($('message'));
+window.addEventListener('resize', updateComposerViewport);
+window.visualViewport?.addEventListener('resize', updateComposerViewport);
+updateComposerViewport();
 enter().catch(()=>showLogin());

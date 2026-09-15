@@ -36,6 +36,7 @@ export function initModels({ api, getState, renderApp, notice, isQueueBusy }) {
     $('models-refresh').hidden = !failure && !needsRefresh;
     $('model-select').title = t('models.modelHint'); $('effort-select').title = t('models.effortHint');
     const hint = busy() ? 'models.saving' : failure ? 'models.loadFailed' : isWorking(state) ? 'models.nextTurn' : null;
+    $('models-status').dataset.state = hint || '';
     $('models-status').hidden = !hint;
     $('models-status').textContent = hint ? t(hint) : '';
     if (busy()) { $('send').disabled = true; $('steer').disabled = true; }

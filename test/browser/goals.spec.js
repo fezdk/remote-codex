@@ -36,6 +36,7 @@ test('Goal remains the feature name in Danish and English; native lifecycle, for
   await expect(page.locator('#goal-button')).toHaveText('Goal');
   await page.setViewportSize({ width: 320, height: 844 });
   if (await page.locator('#close-changes').isVisible()) await page.locator('#close-changes').click();
+  await page.locator('#composer-options-toggle').click();
   await page.locator('#goal-button').click();
   await expect(page.locator('#goal-state')).toHaveText('No Goal in this session');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.getElementById('goal-dialog').scrollWidth <= document.getElementById('goal-dialog').clientWidth)).toBe(true);
