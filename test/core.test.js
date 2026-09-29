@@ -173,3 +173,20 @@ test('login limits failed attempts without locking out repeated successful login
   for (let i = 0; i < 10; i++) assert.equal((await login('wrong')).status, 401);
   assert.equal((await login('wrong')).status, 429);
 });
+
+test('direct messages and steers forward only validated client IDs', async t => {
+  const { request, codex } = await setup(t);
+  await request('/api/threads/session-one/open', {});
+  const response = await request('/api/threads/session-one/message', { text: 'long', clientId: 'normal-client', approvalPolicy: 'never', clientUserMessageId: 'untrusted' });
+  const { turn } = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(codex.calls.at(-1).params, { threadId: 'session-one', input: [{ type: 'text', text: 'long', text_elements: [] }], clientUserMessageId: 'normal-client' });
+  assert.equal(turn.items[0].clientId, 'normal-client');
+  await request('/api/threads/session-one/message', { text: 'steer', turnId: turn.id, clientId: 'steer-client' });
+  assert.equal(codex.calls.at(-1).params.clientUserMessageId, 'steer-client');
+  const before = codex.calls.filter(call => call.method.startsWith('turn/')).length;
+  for (const clientId of ['', 'bad/id', {}, 5, 'x'.repeat(1000)]) {
+    assert.equal((await request('/api/threads/session-one/message', { text: 'long', clientId })).status, 400);
+  }
+  assert.equal(codex.calls.filter(call => call.method.startsWith('turn/')).length, before);
+});

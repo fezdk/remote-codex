@@ -105,3 +105,14 @@ test('failed and delayed commands retain new drafts and do not run commands embe
   await page.locator('#message').press('Enter'); expect((await message).postDataJSON().text).toBe('Please consider /compact later');
   await expect(page.locator('#session-status')).toHaveText('Klar');
 });
+
+test('a delayed blur callback cannot hide autocomplete after refocusing the composer', async ({ page }) => {
+  await login(page);
+  await page.locator('#message').fill('/ren');
+  await page.locator('#message').evaluate(input => { input.blur(); input.focus(); input.dispatchEvent(new Event('input', { bubbles: true })); });
+  // Exercise the 150 ms focus-loss timer after focus has already returned.
+  await page.waitForTimeout(200);
+  await expect(page.locator('#input-suggestions')).toBeVisible();
+  await page.locator('#message').press('Tab');
+  await expect(page.locator('#message')).toHaveValue('/rename ');
+});

@@ -230,6 +230,10 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
           if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 100000) throw fail('error.message');
           if (!codex.subscriptions.has(threadId)) throw fail('error.openSession', 409);
           const params = { threadId, input: await sessionTools.input(threadId, input) };
+          if (input.clientId != null) {
+            if (!idOK(input.clientId)) throw fail('error.message');
+            params.clientUserMessageId = input.clientId;
+          }
           if (input.turnId != null) {
             if (!idOK(input.turnId)) throw fail('error.turnId');
             params.expectedTurnId = input.turnId;

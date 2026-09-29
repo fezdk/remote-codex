@@ -44,3 +44,29 @@ test('history replay retains messages observed during loading without double-app
   assert.deepEqual(s.turns[0].items.map(i => i.id), ['user', 'agent']);
   assert.equal(s.turns[0].items[1].text, 'Updated');
 });
+
+test('client IDs reconcile live items, snapshots and late acknowledgements before completion', () => {
+  for (const reverse of [false, true]) {
+    const live = { ...user('live'), clientId: 'submission' }, stored = { ...user('stored'), clientId: 'submission' };
+    const [first, second] = reverse ? [stored, live] : [live, stored];
+    const s = state();
+    applyEvent(s, { method: 'item/completed', params: { threadId: 'demo', turnId: 'turn', item: first } });
+    restoreHistory(s, [{ id: 'turn', status: 'inProgress', items: [second, agent] }], [], 0);
+    applyEvent(s, { method: 'item/completed', params: { threadId: 'demo', turnId: 'turn', item: second } });
+    assert.deepEqual(s.turns[0].items, [first, agent]);
+    acceptTurn(s, { id: 'turn', status: 'inProgress', items: [second] });
+    assert.equal(s.turns[0].items.filter(item => item.type === 'userMessage').length, 1);
+    assert.equal(s.turns[0].status, 'inProgress');
+  }
+});
+
+test('item identity preserves deliberate repeated text and collapses duplicates within snapshots', () => {
+  const first = { ...user('first'), clientId: 'one' }, second = { ...user('second'), clientId: 'two' };
+  const items = [first, first, { ...first, id: 'alias' }, second, user('legacy-one'), user('legacy-two')];
+  const merged = mergeTurns([], [{ id: 'turn', items }]);
+  assert.deepEqual(merged[0].items.map(item => item.id), ['first', 'second', 'legacy-one', 'legacy-two']);
+  const summary = { ...first, id: 'other-alias', content: [] };
+  assert.deepEqual(mergeTurns(merged, [{ id: 'turn', itemsView: 'summary', items: [summary] }])[0].items, merged[0].items);
+  const nullId = mergeTurns(merged, [{ id: 'turn', items: [{ ...first, clientId: null }] }]);
+  assert.equal(nullId[0].items[0].clientId, 'one');
+});

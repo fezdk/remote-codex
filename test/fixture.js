@@ -45,7 +45,7 @@ export class FixtureCodex extends EventEmitter {
       if(method==='thread/queue/list')return{data:structuredClone(list),nextCursor:null};
       if(method==='thread/queue/add'){const queuedSubmission={id:`queued-${++this.queueCount}`,input:params.input,clientUserMessageId:params.clientUserMessageId};list.push(queuedSubmission);this.event('thread/queue/changed',{threadId:params.threadId});return{queuedSubmission};}
       if(method==='thread/queue/delete'){if(index>=0)list.splice(index,1);this.event('thread/queue/changed',{threadId:params.threadId});return{deleted:index>=0};}
-      if(method==='thread/queue/start'){if(index<0)throw new Error('queued submission not found');const item=list.splice(index,1)[0];this.event('thread/queue/changed',{threadId:params.threadId});return this.rpc('turn/start',{threadId:params.threadId,input:item.input});}
+      if(method==='thread/queue/start'){if(index<0)throw new Error('queued submission not found');const item=list.splice(index,1)[0];this.event('thread/queue/changed',{threadId:params.threadId});return this.rpc('turn/start',{threadId:params.threadId,input:item.input,clientUserMessageId:item.clientUserMessageId});}
     }
     if(method==='thread/list')return{data:this.threads.filter(t=>!params.searchTerm||t.name.toLowerCase().includes(params.searchTerm.toLowerCase())),nextCursor:null};
     if(method==='thread/resume')return{thread:{...this.threads.find(t=>t.id===params.threadId),turns:[]},model:'local-model'};
@@ -58,7 +58,7 @@ export class FixtureCodex extends EventEmitter {
       const text=params.input[0].text;
       const turn={id:`turn-${this.turns.length}`,startedAt:Date.now()/1000,status:'inProgress',items:[]};
       this.turns.push(turn);this.event('turn/started',{threadId:params.threadId,turn:structuredClone(turn)});
-      const user={id:`user-${turn.id}`,type:'userMessage',content:params.input};turn.items.push(user);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item:user});
+      const user={id:`user-${turn.id}`,type:'userMessage',clientId:params.clientUserMessageId||null,content:params.input};turn.items.push(user);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item:user});
       if(text==='approval'){
         this.event('item/commandExecution/requestApproval',{threadId:params.threadId,turnId:turn.id,itemId:'approval-command',command:'npm test',cwd:'/home/demo/project',reason:'Kør projektets tests',availableDecisions:['accept','decline','cancel']},42);
       }else if(text==='question'){
@@ -73,7 +73,7 @@ export class FixtureCodex extends EventEmitter {
     if(method==='turn/steer'){
       const turn=this.turns.find(t=>t.id===params.expectedTurnId);
       if(!turn||turn.status!=='inProgress')throw new Error('Turn is no longer active.');
-      const item={id:`steered-${this.sequence}`,type:'userMessage',content:params.input};turn.items.push(item);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item});return{turnId:turn.id};
+      const item={id:`steered-${this.sequence}`,type:'userMessage',clientId:params.clientUserMessageId||null,content:params.input};turn.items.push(item);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item});return{turnId:turn.id};
     }
     if(method==='turn/interrupt'){
       const turn=this.turns.find(t=>t.id===params.turnId);turn.status='interrupted';this.event('turn/completed',{threadId:params.threadId,turn:structuredClone(turn)});return{};

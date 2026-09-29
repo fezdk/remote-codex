@@ -22,9 +22,26 @@ export function messageTiming(state, turn, item) {
   return at === undefined ? null : { at, source: 'received' };
 }
 
+export const userMessageClientId = item => item?.type === 'userMessage' && typeof item.clientId === 'string' && item.clientId ? item.clientId : null;
+
 // Turn notifications can contain only some items. Merge by ID without discarding
 // streamed messages, and insert newly loaded history before its next known item.
 function mergeItems(existing = [], incoming = [], summary = false) {
+  // Live and persisted user items can have different item IDs. Only an explicit
+  // client ID establishes equivalence; identical text can be intentional.
+  const clients = new Map([...existing, ...incoming].filter(userMessageClientId).map(item => [item.id, item.clientId]));
+  const canonical = new Map();
+  function normalize(items) {
+    const unique = new Map();
+    for (const item of items) {
+      const clientId = item.type === 'userMessage' ? clients.get(item.id) : null;
+      if (clientId && !canonical.has(clientId)) canonical.set(clientId, item.id);
+      const id = clientId ? canonical.get(clientId) : item.id;
+      unique.set(id, { ...unique.get(id), ...item, id, ...(clientId ? { clientId } : {}) });
+    }
+    return [...unique.values()];
+  }
+  existing = normalize(existing); incoming = normalize(incoming);
   const known = new Map(existing.map(item => [item.id, item]));
   const before = new Map(); let additions = [];
   for (const item of incoming) {
@@ -79,11 +96,14 @@ export function createSteerTracker() {
   function observe(threadId, turnId, item) {
     if (item?.type !== 'userMessage' || !item.id || !entries.has(threadId)) return;
     const observed = seen.get(threadId), itemKey = key(turnId, item.id);
+    const clientId = userMessageClientId(item), clientKey = clientId && JSON.stringify(['client', turnId, clientId]);
+    if (clientKey && observed.has(clientKey)) return;
     if (observed.has(itemKey)) return;
-    const entry = entries.get(threadId).find(candidate => !existingItems.get(candidate).has(itemKey) && candidate.turnId === turnId && text(candidate.input) === text(item.content));
+    const entry = entries.get(threadId).find(candidate => !existingItems.get(candidate).has(itemKey) && candidate.turnId === turnId && (!clientId || candidate.id === clientId) && text(candidate.input) === text(item.content));
     // An item can be announced before its text is complete. Only consume a match.
     if (!entry) return;
     observed.add(itemKey);
+    if (clientKey) observed.add(clientKey);
     entry.received = true;
     remove(threadId, entry);
   }
@@ -179,11 +199,7 @@ export function applyEvent(state, message) {
   if (p.turnId && (message.method.startsWith('item/') || message.method === 'error')) {
     let turn = state.turns.find(t => t.id === p.turnId);
     if (!turn) { turn = { id: p.turnId, status: 'inProgress', items: [], startedAt: null, observedStartedAt: Date.now()/1000 }; state.turns.push(turn); }
-    if (p.item) {
-      const index = turn.items.findIndex(item => item.id === p.item.id);
-      if (index < 0) turn.items.push(p.item);
-      else turn.items[index] = { ...turn.items[index], ...p.item };
-    }
+    if (p.item) turn.items = mergeItems(turn.items, [p.item]);
     if (p.itemId && typeof p.delta === 'string') {
       const types = { 'item/agentMessage/delta': ['agentMessage','text'], 'item/commandExecution/outputDelta': ['commandExecution','aggregatedOutput'], 'item/plan/delta': ['plan','text'], 'item/reasoning/summaryTextDelta': ['reasoning','summary'] };
       const spec = types[message.method];

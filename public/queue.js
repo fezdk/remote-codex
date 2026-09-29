@@ -1,5 +1,5 @@
 import { t, errorText } from './i18n.js';
-import { activeTurn, isWorking, acceptTurn, createSteerTracker } from './state.js';
+import { activeTurn, isWorking, acceptTurn, createSteerTracker, userMessageClientId } from './state.js';
 const $ = id => document.getElementById(id);
 const textOf = item => (item.input || []).filter(part => part.type === 'text').map(part => part.text).join('\n');
 const textOnly = item => item.input?.some(part => part.type === 'text') && item.input.every(part => ['text', 'skill'].includes(part.type));
@@ -27,7 +27,13 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
   function render() {
     reconcileEditing();
     const state = getState(), active = activeTurn(state), working = isWorking(state), submission = pending.get(threadId);
-    const flight = submission?.received || submission?.steer ? null : submission;
+    const delivered = new Set(state.turns.flatMap(turn => turn.items || []).filter(item => item.content?.some(part => part.type === 'text' && part.text)).map(userMessageClientId).filter(Boolean));
+    if (submission && delivered.has(submission.id)) submission.received = true;
+    // A queue snapshot can lag behind delivery; the conversation is sufficient
+    // acknowledgement even if the HTTP reply or queue-changed event is late.
+    items = items.filter(item => !delivered.has(item.clientUserMessageId));
+    if (failed.has(threadId)) failed.set(threadId, failed.get(threadId).filter(item => !delivered.has(item.id)));
+    const flight = submission?.received || submission?.steer || items.some(item => item.clientUserMessageId === submission?.id) ? null : submission;
     const fragment = document.createDocumentFragment();
     const disabled = !state.connected || !state.ready || Boolean(submission) || busy.has(threadId) || isSettingsBusy() || state.thread?.canAcceptDirectInput === false;
     function card(item, status, actions) {
@@ -44,8 +50,9 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
     ]);
     if (flight) card(flight, t('queue.sending'), []);
     for (const item of failed.get(threadId) || []) card(item, t(item.recoveryKey || 'queue.failed'), [['queue.restore', () => { failed.set(threadId, failed.get(threadId).filter(other => other !== item)); draft(textOf(item), 'resubmit'); }]]);
+    const hasCards = fragment.childNodes.length > 0;
     $('queue-list').replaceChildren(fragment);
-    $('queue-area').hidden = !fragment.childNodes.length && !items.length && !flight && !(failed.get(threadId)?.length) && !failure;
+    $('queue-area').hidden = !hasCards && !failure && !more;
     $('queue-error').textContent = failure ? `${t('queue.unsupported')} ${errorText(failure)}` : more ? t('queue.more') : '';
     const mode = editing.get(threadId)?.mode;
     $('edit-mode').hidden = !mode;
@@ -100,10 +107,10 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
         if (epoch !== generation) return;
         if (!result.deleted) { notice(t('queue.noLongerQueued')); return; }
         withdrawn = true;
-        submission = { ...item, id: clientId(), steer: true, turnId: turn.id };
+        submission = { ...item, id: item.clientUserMessageId || clientId(), steer: true, turnId: turn.id };
         steers.track(id, submission, turns); pending.set(id, submission);
         if (threadId === id) { items = items.filter(other => other.id !== item.id); renderApp(true); }
-        await api(`/api/threads/${encodeURIComponent(id)}/message`, { text: textOf(item), turnId: turn.id, skills: item.input.filter(part => part.type === 'skill').map(part => part.name) });
+        await api(`/api/threads/${encodeURIComponent(id)}/message`, { text: textOf(item), clientId: submission.id, turnId: turn.id, skills: item.input.filter(part => part.type === 'skill').map(part => part.name) });
         if (epoch !== generation) return;
         submission.confirmed = true;
       } else await api(endpoint(id, item, 'start'), {});
@@ -125,7 +132,7 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
     pending.set(id, item); renderApp(true);
     try {
       const queue = isWorking(state) && !steer;
-      const response = await api(`/api/threads/${encodeURIComponent(id)}/${queue ? 'queue' : 'message'}`, { text, skills: skillsFor(text), ...(queue ? { clientId: item.id } : steer && turn ? { turnId: turn.id } : {}) });
+      const response = await api(`/api/threads/${encodeURIComponent(id)}/${queue ? 'queue' : 'message'}`, { text, clientId: item.id, skills: skillsFor(text), ...(!queue && steer && turn ? { turnId: turn.id } : {}) });
       if (epoch !== generation) return;
       item.confirmed = true;
       if (getDraft(id) === text) saveDraft(id, '');
@@ -139,7 +146,7 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
     } catch (error) {
       if (epoch === generation) {
         if (steer) steers.remove(id, item);
-        if (getDraft(id) !== text) failed.set(id, [...failed.get(id) || [], item]);
+        if (!item.received && getDraft(id) !== text) failed.set(id, [...failed.get(id) || [], item]);
         notice(error);
       }
     }
@@ -154,7 +161,8 @@ export function initQueue({ api, getState, notice, renderApp, getDraft, saveDraf
     const submission = pending.get(id), item = message.params?.item;
     if (['item/started', 'item/completed'].includes(message.method)) steers.observe(id, message.params.turnId, item);
     if (message.params?.turn) steers.reconcile(id, [message.params.turn]);
-    if (submission && !submission.steer && ['item/started', 'item/completed'].includes(message.method) && item?.type === 'userMessage' && textOf({ input: item.content }) === textOf(submission)) {
+    if (submission && message.params?.turn?.items?.some(item => userMessageClientId(item) === submission.id && textOf({ input: item.content }) === textOf(submission))) submission.received = true;
+    if (submission && !submission.steer && ['item/started', 'item/completed'].includes(message.method) && item?.type === 'userMessage' && (!userMessageClientId(item) || item.clientId === submission.id) && textOf({ input: item.content }) === textOf(submission)) {
       submission.received = true;
       editing.delete(id);
     }

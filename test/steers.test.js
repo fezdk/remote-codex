@@ -49,3 +49,18 @@ test('a later submission does not hide an earlier incomplete conversation announ
   tracker.observe('thread', 'active', message('announced'));
   assert.deepEqual(tracker.list('thread'), [second]);
 });
+
+test('explicit client IDs distinguish identical steers and survive item ID changes', () => {
+  const tracker = createSteerTracker(), first = entry('first'), second = entry('second');
+  tracker.track('thread', first, []); tracker.track('thread', second, []);
+  tracker.observe('thread', 'active', { ...message('foreign'), clientId: 'another-client' });
+  assert.equal(tracker.list('thread').length, 2);
+  tracker.observe('thread', 'active', { ...message('second-live'), clientId: 'second' });
+  assert.deepEqual(tracker.list('thread'), [first]);
+  tracker.observe('thread', 'active', { ...message('second-stored'), clientId: 'second' });
+  assert.deepEqual(tracker.list('thread'), [first]);
+  tracker.observe('thread', 'active', { ...message('first-live'), clientId: 'first', content: [] });
+  assert.deepEqual(tracker.list('thread'), [first]);
+  tracker.observe('thread', 'active', { ...message('first-live'), clientId: 'first' });
+  assert.equal(tracker.list('thread').length, 0);
+});

@@ -186,7 +186,7 @@ export function initSessionTools({ api, getState, notice, renderApp, getDraft, s
   input.addEventListener('scroll', highlight);
   input.addEventListener('click', suggestions);
   input.addEventListener('keyup', event => { if (event.key !== 'Escape') suggestions(); });
-  input.addEventListener('blur', () => { setTimeout(() => { if (!$('input-suggestions').contains(document.activeElement)) $('input-suggestions').hidden = true; }, 150); });
+  input.addEventListener('blur', () => { setTimeout(() => { if (document.activeElement !== input && !$('input-suggestions').contains(document.activeElement)) $('input-suggestions').hidden = true; }, 150); });
   new ResizeObserver(highlight).observe(input);
   $('session-tools').onclick = () => show('help');
   $('tools-close').onclick = () => dialog.close();
