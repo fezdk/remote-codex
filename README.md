@@ -417,6 +417,8 @@ See the official [Codex App Server documentation](https://learn.chatgpt.com/docs
 codex app-server generate-ts --experimental --out /tmp/remote-codex-protocol
 ```
 
+Code snippets, command output, paths, and diffs share an explicit local monospace font stack (SFMono-Regular, Menlo, Consolas, Liberation Mono, DejaVu Sans Mono, Courier New, then the browser’s monospace fallback). No font downloads are required. The actual font depends on installed fonts and browser preferences.
+
 ## Development and testing
 
 ```bash
