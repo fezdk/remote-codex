@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { createMedia, MAX_IMAGE_BYTES } from './media.js';
 import { createGoals } from './goals.js';
+import { createPlans } from './plans.js';
 import { messages } from '../public/locales.js';
 import { codexChanges, gitChanges, gitFileDiff } from './changes.js';
 import { suggestProjects, prepareProject } from './projects.js';
@@ -62,6 +63,7 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
   const attempts = new Map();
   const sessionTools = createSessionTools(codex);
   const goals = createGoals(codex);
+  const plans = createPlans(codex);
   let eventId = 0;
   const sendEvent = (res, type, data) => {
     if (res.writableLength > 2 * 1024 * 1024) return res.destroy();
@@ -73,8 +75,8 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
       else sendEvent(res, type, data);
     }
   };
-  const onEvent = data => { sessionTools.event(data); broadcast('codex', media.event(data)); };
-  const onStatus = data => { sessionTools.connection(data); broadcast('status', data); };
+  const onEvent = data => { sessionTools.event(data); broadcast('codex', media.event(plans.event(data))); };
+  const onStatus = data => { sessionTools.connection(data); plans.connection(data); broadcast('status', data); };
   codex.on('event', onEvent);
   codex.on('status', onStatus);
   const server = http.createServer(async (req, res) => {
@@ -190,10 +192,11 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
           res.end(bytes); return;
         }
       }
-      const match = path.match(/^\/api\/threads\/([^/]+)\/(open|turns|message|interrupt|changes|git|git-diff|queue|skills|status|command|settings|goal)$/);
+      const match = path.match(/^\/api\/threads\/([^/]+)\/(open|turns|message|interrupt|changes|git|git-diff|queue|skills|status|command|settings|goal|plan)$/);
       if (match) {
         const [, threadId, action] = match;
         if (!idOK(threadId)) throw fail('error.sessionId');
+        if (action === 'plan' && req.method === 'GET') { json(200, await plans.read(threadId)); return; }
         if (action === 'goal' && req.method === 'GET') { json(200, await goals.read(threadId)); return; }
         if (action === 'goal' && req.method === 'POST') {
           const input = await body(req);

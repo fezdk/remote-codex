@@ -287,7 +287,9 @@ Disconnections, context compaction, and session settings changes mark cached fig
 
 See the official [App Server skills protocol](https://learn.chatgpt.com/docs/app-server#skills) and [event documentation](https://learn.chatgpt.com/docs/app-server#events).
 
-## Reviewing file changes
+## Files and tasks
+
+Open **Files and tasks** beside the session header to switch between Codex changes, Git changes and the task list.
 
 The **Codex** tab summarizes completed `fileChange` items recorded in the selected session's history. Repeated changes are grouped by file. Added/removed line counts sum individual patches; they are not a net diff. Changes made through shell commands or other tools appear here only if Codex records them as file changes.
 
@@ -295,7 +297,19 @@ The **Git** tab shows the project's current staged, unstaged, and untracked chan
 
 The panel refreshes when file changes or turns complete. Use its refresh button to pick up external Git changes. Large histories and diffs are capped and marked as truncated. A selected file displays at most 5,000 diff lines and 200,000 characters; conversation and tool items display at most 200,000 characters each. Binary untracked files and symlink contents are not opened as text.
 
-On desktop, drag the divider between the conversation and changes panel to give diffs more room. The width is remembered in the browser and constrained to the available space. Double-click to reset it. The divider supports Tab focus, left/right arrow keys, and Home/End for the minimum/maximum width. On smaller screens, the changes panel opens over the conversation.
+On desktop, drag the divider between the conversation and project panel to give diffs or tasks more room. The width is remembered in the browser and constrained to the available space. Double-click to reset it. The divider supports Tab focus, left/right arrow keys, and Home/End for the minimum/maximum width. On smaller screens, the changes panel opens over the conversation.
+
+
+### Task progress
+
+Implementation and validation details are in the [task progress review](docs/task-progress.md).
+
+The **Tasks** tab (**Opgaver** in Danish) displays Codex's latest structured task list, with pending, in-progress and completed steps, an explanation and a completion count. It follows native `turn/plan/updated` notifications documented in the [Codex app-server protocol](https://learn.chatgpt.com/docs/app-server). Codex controls the list: this is a read-only progress view, not a manual checklist editor or a request to enable Plan mode. A prose `plan` item or Markdown checklist is not interpreted as structured task progress.
+
+Plans update live and remain available across browser reloads and session switching while the bridge runs. Completed, failed and interrupted turns retain the last reported step statuses; a finished response never automatically checks off unfinished steps. When a new turn starts, the prior plan is explicitly labelled until a new plan arrives. Disconnections mark the display as potentially outdated until another native plan update arrives.
+
+The inspected protocol provides plan notifications but no structured-plan snapshot in normal turn history. The bridge therefore keeps only plans it observes while connected and subscribed. Its in-memory cache covers the latest 100 observed threads and resets when the webserver restarts; it does not read private Codex rollout files or persist another transcript. Empty state means no plan has been received, not that all work is complete. Refresh retrieves the bridge's latest observation; it cannot ask Codex to reconstruct a missing plan. Plans are bounded to 100 steps, 2,000 characters per step and 4,000 explanation characters, with a visible truncation note.
+
 
 ## Language and appearance
 

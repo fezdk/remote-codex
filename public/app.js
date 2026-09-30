@@ -74,6 +74,7 @@ function setConnection(status) {
   renderConnection();
   renderList();
   renderControls();
+  changes.render();
 }
 function renderConnection() {
   const status = connectionStatus;

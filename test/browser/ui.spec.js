@@ -74,7 +74,7 @@ test('preferences, translated drafts, changes tabs and queue edit/cancel/steer/r
   await page.locator('#interrupt').click();await expect(page.locator('#session-status')).toHaveText('Klar');
   await page.locator('#message').fill('Min urørte kladde');
   await page.locator('#workspace [data-language-select]').selectOption('en');
-  await expect(page.locator('#message')).toHaveValue('Min urørte kladde');await expect(page.locator('#connection-label')).toHaveText('Connected');await expect(page.locator('#toggle-changes')).toHaveText('Changed files');
+  await expect(page.locator('#message')).toHaveValue('Min urørte kladde');await expect(page.locator('#connection-label')).toHaveText('Connected');await expect(page.locator('#toggle-changes')).toHaveText('Files and tasks');
   await page.locator('#workspace [data-theme-toggle]').click();
   const theme=await page.locator('html').getAttribute('data-theme');
   await page.locator('#codex-tab').click();await expect(page.locator('#changed-files')).toContainText('app.js');
@@ -175,7 +175,7 @@ test('new session suggests folders with keyboard selection and validates missing
 });
 test('changes divider resizes, keeps drafts and selection, remembers width and adapts to mobile',async({page})=>{
   await login(page);
-  const panel=page.locator('#changes-panel'),divider=page.getByRole('separator',{name:'Tilpas filpanelets bredde'});
+  const panel=page.locator('#changes-panel'),divider=page.getByRole('separator',{name:'Tilpas projektpanelets bredde'});
   await page.locator('#message').fill('Keep this draft');await page.locator('.changed-file').first().click();
   const selected=await page.locator('#change-detail h3').first().textContent();
   const initial=await panel.boundingBox(),handle=await divider.boundingBox();

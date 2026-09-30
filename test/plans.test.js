@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { resolve } from 'node:path';
+import { createPlans } from '../server/plans.js';
+import { createWebServer } from '../server/http.js';
+import { FixtureCodex } from './fixture.js';
+const update = (threadId='session-one',turnId='turn-one',plan=[{step:'Inspect',status:'completed'},{step:'Build',status:'inProgress'},{step:'Test',status:'pending'}]) => ({method:'turn/plan/updated',params:{threadId,turnId,explanation:'A structured plan',plan}});
+test('plans follow native progress, retain unfinished tasks and distinguish earlier turns without mutating notifications',async()=>{
+  const codex=new FixtureCodex(),plans=createPlans(codex),id='session-one';
+  assert.deepEqual(await plans.read(id),{plan:null});
+  const original=update(),annotated=plans.event(original);assert.equal(original.params.remotePlan,undefined);
+  assert.equal(annotated.params.remotePlan.plan.steps.length,3);assert.equal((await plans.read('session-two')).plan,null);
+  plans.event({method:'turn/completed',params:{threadId:id,turn:{id:'turn-one',status:'interrupted'}}});
+  let plan=(await plans.read(id)).plan;assert.equal(plan.turnStatus,'interrupted');assert.equal(plan.steps[1].status,'inProgress');
+  plans.event({method:'turn/started',params:{threadId:id,turn:{id:'turn-two'}}});assert.equal((await plans.read(id)).plan.previousTurn,true);
+  plans.event(update(id,'turn-two',[]));plan=(await plans.read(id)).plan;assert.deepEqual(plan.steps,[]);assert.equal(plan.previousTurn,false);
+  plans.event({method:'turn/completed',params:{threadId:id,turn:{id:'turn-one',status:'failed'}}});assert.equal((await plans.read(id)).plan.turnStatus,'inProgress');
+  plans.event({method:'turn/completed',params:{threadId:id,turn:{id:'turn-two',status:'completed'}}});plans.event(update(id,'turn-two',[]));assert.equal((await plans.read(id)).plan.turnStatus,'completed');
+  plans.connection({state:'disconnected'});plans.connection({state:'connected'});assert.equal((await plans.read(id)).plan.stale,true);
+  plans.event(update(id,'turn-three'));assert.equal((await plans.read(id)).plan.stale,false);
+  plans.event({method:'thread/deleted',params:{threadId:id}});assert.equal((await plans.read(id)).plan,null);
+  assert.equal(createPlans(codex).event({method:'item/completed',params:{threadId:id,item:{type:'plan',text:'- [x] Not structured'}}}).params.remotePlan,undefined);
+  await assert.rejects(plans.read('missing'),{status:404});
+});
+test('plan cache and untrusted content are bounded and reset on bridge restart',async()=>{
+  const codex=new FixtureCodex(),plans=createPlans(codex);
+  plans.event(update('session-one','turn-one',Array.from({length:200},()=>({step:'x'.repeat(4000),status:'pending'}))));
+  const plan=(await plans.read('session-one')).plan;assert.equal(plan.steps.length,100);assert.equal(plan.steps[0].step.length,2000);assert.equal(plan.truncated,true);
+  assert.equal((await createPlans(codex).read('session-one')).plan,null);
+  for(let n=0;n<100;n++)plans.event(update('synthetic-'+n));
+  assert.equal((await plans.read('session-one')).plan,null);
+  plans.event(update('session-one','turn-one',[null,{step:'Unknown',status:'invented'},{step:'Valid',status:'pending'}]));assert.equal((await plans.read('session-one')).plan.steps.length,1);
+});
+test('plan endpoint requires login, is read-only and retains native updates across HTTP reads',async t=>{
+  const codex=new FixtureCodex(),server=createWebServer({codex,token:'synthetic-plan-test-token',publicDir:resolve('public')});
+  server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>{server.closeStreams();server.closeAllConnections();server.close();});
+  const base=`http://127.0.0.1:${server.address().port}`,url=base+'/api/threads/session-one/plan';
+  assert.equal((await fetch(url)).status,401);
+  const login=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:'synthetic-plan-test-token'})});const cookie=login.headers.get('set-cookie').split(';')[0];
+  const message=update();codex.event(message.method,message.params);
+  assert.equal((await (await fetch(url,{headers:{cookie}})).json()).plan.steps.length,3);
+  assert.equal((await fetch(url,{headers:{cookie,Origin:'https://attacker.example'}})).status,403);
+  assert.equal((await fetch(url,{method:'POST',headers:{cookie,'Content-Type':'application/json'},body:'{}'})).status,404);
+  assert.ok(codex.calls.every(call=>call.method==='thread/read'));
+});

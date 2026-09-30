@@ -10,6 +10,7 @@ export function initChanges({ api, getState }) {
   try { const saved = Number(localStorage.getItem('remote-codex.changes-width')); if (Number.isFinite(saved) && saved >= 280 && saved <= 10000) preferredWidth = saved; } catch { /* Resizing also works without storage. */ }
   let threadId, source = 'codex', visible = desktop.matches;
   let files = [], selection = null, detail = null, busy = false, failure = null, truncated = false, revision = 0, detailRevision = 0, timer;
+  let plan = null, planBusy = false, planFailure = null, planRevision = 0;
   function widthLimits() {
     return { min: 280, max: Math.max(280, container.clientWidth - 360 - 8) };
   }
@@ -63,6 +64,7 @@ export function initChanges({ api, getState }) {
     $('toggle-changes').setAttribute('aria-expanded', String(visible));
     for (const tab of document.querySelectorAll('[data-source]')) { const selected = tab.dataset.source === source; tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1; }
     $('changes-content').setAttribute('aria-labelledby', `${source}-tab`);
+    if (source === 'tasks') { renderPlan(); return; }
     $('changes-description').textContent = t(source === 'codex' ? 'changes.codexDescription' : 'changes.gitDescription');
     $('changes-summary').textContent = failure ? errorText(failure) : busy ? t('changes.loading') : files.length ? t(files.length === 1 ? 'changes.oneFile' : 'changes.count', { count: files.length }) + (truncated ? `\n${t('changes.truncated')}` : '') : t(source === 'codex' ? 'changes.emptyCodex' : 'changes.emptyGit');
     $('changes-summary').classList.toggle('error', Boolean(failure));
@@ -81,6 +83,38 @@ export function initChanges({ api, getState }) {
     }
     $('changed-files').replaceChildren(list);
     renderDetail();
+  }
+  function renderPlan() {
+    const scroll = $('changes-content').scrollTop;
+    $('changes-description').textContent = t('tasks.description');
+    const status = planFailure ? errorText(planFailure) : planBusy && !plan ? t('changes.loading') : !plan ? t('tasks.empty') : t('tasks.progress',{done:plan.steps.filter(step=>step.status==='completed').length,total:plan.steps.length});
+    $('changes-summary').textContent = status;
+    $('changes-summary').classList.toggle('error',Boolean(planFailure));
+    $('changed-files').replaceChildren(); $('change-detail').replaceChildren();
+    const content = document.createDocumentFragment();
+    if (!getState().connected || plan?.stale) content.append(node('p','task-note',t('tasks.stale')));
+    if (plan) {
+      if (plan.previousTurn) content.append(node('p','task-note',t('tasks.previous')));
+      if (plan.turnStatus !== 'inProgress') content.append(node('p','task-note',t(`tasks.turn.${plan.turnStatus}`,{},t('tasks.turn.unknown'))));
+      if (plan.explanation) content.append(node('p','task-explanation',plan.explanation));
+      if (plan.steps.length) {
+        const progress = node('progress','task-progress'); progress.max = plan.steps.length; progress.value = plan.steps.filter(step=>step.status==='completed').length; progress.setAttribute('aria-label',status); content.append(progress);
+        const list = node('ol','task-list');
+        for (const step of plan.steps) {
+          const row = node('li',`task-step ${step.status}`), mark = node('span','task-mark',{pending:'○',inProgress:'◉',completed:'✓'}[step.status]); mark.setAttribute('aria-hidden','true');
+          const body = node('div','task-body'); body.append(node('span','task-text',step.step),node('span','task-state',t(`tasks.${step.status}`))); row.append(mark,body); list.append(row);
+        }
+        content.append(list);
+      } else content.append(node('p','task-note',t('tasks.cleared')));
+      if (plan.truncated) content.append(node('p','task-note',t('tasks.truncated')));
+    }
+    $('change-detail').append(content); $('changes-content').scrollTop = scroll;
+  }
+  async function refreshPlan() {
+    const version = ++planRevision, id = threadId; planBusy = true; planFailure = null; render();
+    try { const result = await api(`/api/threads/${encodeURIComponent(id)}/plan`); if (version === planRevision) plan = result.plan; }
+    catch (error) { if (version === planRevision) planFailure = error; }
+    finally { if (version === planRevision) { planBusy = false; render(); } }
   }
   function renderDetail() {
     const fragment = document.createDocumentFragment();
@@ -125,6 +159,7 @@ export function initChanges({ api, getState }) {
   }
   async function refresh() {
     if (!threadId || !visible || !getState().connected) return;
+    if (source === 'tasks') return refreshPlan();
     const version = ++revision; busy = true; failure = null; render();
     try {
       const result = await api(`/api/threads/${encodeURIComponent(threadId)}/${source === 'codex' ? 'changes' : 'git'}`);
@@ -138,6 +173,7 @@ export function initChanges({ api, getState }) {
   function selectThread(id) {
     if (threadId === id) return;
     threadId = id; busy = false; files = []; selection = null; detail = null; failure = null; truncated = false; ++revision; ++detailRevision;
+    plan = null; planBusy = false; planFailure = null; ++planRevision; clearTimeout(timer);
     render(); refresh();
   }
   function show(open) {
@@ -152,13 +188,18 @@ export function initChanges({ api, getState }) {
     tab.onclick = () => { source = tab.dataset.source; files = []; selection = null; detail = null; failure = null; truncated = false; ++revision; ++detailRevision; render(); refresh(); };
     tab.onkeydown = event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-      event.preventDefault(); const next = event.key === 'Home' ? 'codex' : event.key === 'End' ? 'git' : source === 'codex' ? 'git' : 'codex';
+      event.preventDefault(); const sources = ['codex','git','tasks']; const next = event.key === 'Home' ? sources[0] : event.key === 'End' ? sources.at(-1) : sources[(sources.indexOf(source) + (event.key === 'ArrowRight' ? 1 : 2)) % sources.length];
       $(`${next}-tab`).click(); $(`${next}-tab`).focus();
     };
   }
   $('changes-panel').onkeydown = event => { if (event.key === 'Escape') show(false); };
   return { render, selectThread, refresh, event(message) {
     if (message.params?.threadId !== threadId) return;
+    if (Object.hasOwn(message.params || {},'remotePlan')) {
+      ++planRevision; planBusy = false; planFailure = null; plan = message.params.remotePlan.plan;
+      if (source === 'tasks') render();
+    }
+    if (source === 'tasks') return;
     if (message.method === 'turn/completed' || message.method === 'item/completed' && message.params.item?.type === 'fileChange') { clearTimeout(timer); timer = setTimeout(refresh, 650); }
   } };
 }

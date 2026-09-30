@@ -61,7 +61,9 @@ export class FixtureCodex extends EventEmitter {
       const turn={id:`turn-${this.turns.length}`,startedAt:Date.now()/1000,status:'inProgress',items:[]};
       this.turns.push(turn);this.event('turn/started',{threadId:params.threadId,turn:structuredClone(turn)});
       const user={id:`user-${turn.id}`,type:'userMessage',clientId:params.clientUserMessageId||null,content:params.input};turn.items.push(user);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item:user});
-      if(text==='markdown image fixture'){
+      if(text==='task fixture'){
+        this.event('turn/plan/updated',{threadId:params.threadId,turnId:turn.id,explanation:'Build and verify the synthetic preview.',plan:[{step:'Inspect the project',status:'completed'},{step:'Build the interface',status:'inProgress'},{step:'Run the tests <script>literal</script>',status:'pending'}]});
+      }else if(text==='markdown image fixture'){
         const path=fileURLToPath(new URL('./fixtures/image-demo.png',import.meta.url));
         const link=`[Se mobilpreview](${path})`;
         const item={id:`markdown-image-${turn.id}`,type:'agentMessage',text:''};turn.items.push(item);this.event('item/started',{threadId:params.threadId,turnId:turn.id,item:structuredClone(item)});
@@ -84,7 +86,11 @@ export class FixtureCodex extends EventEmitter {
     if(method==='turn/steer'){
       const turn=this.turns.find(t=>t.id===params.expectedTurnId);
       if(!turn||turn.status!=='inProgress')throw new Error('Turn is no longer active.');
-      const item={id:`steered-${this.sequence}`,type:'userMessage',clientId:params.clientUserMessageId||null,content:params.input};turn.items.push(item);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item});return{turnId:turn.id};
+      const item={id:`steered-${this.sequence}`,type:'userMessage',clientId:params.clientUserMessageId||null,content:params.input};turn.items.push(item);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item});
+      if(params.input[0]?.text==='task fixture finish'){
+        this.event('turn/plan/updated',{threadId:params.threadId,turnId:turn.id,explanation:'Verified the synthetic preview.',plan:['Inspect the project','Build the interface','Run the tests <script>literal</script>'].map(step=>({step,status:'completed'}))});this.complete(params.threadId,turn);
+      }
+      return{turnId:turn.id};
     }
     if(method==='turn/interrupt'){
       const turn=this.turns.find(t=>t.id===params.turnId);turn.status='interrupted';this.event('turn/completed',{threadId:params.threadId,turn:structuredClone(turn)});return{};
