@@ -2,6 +2,21 @@
 export const languages = { da: 'Dansk', en: 'English' };
 export const messages = {
   da: {
+    "media.attach": "Vedhæft billeder",
+    "media.image": "Billede",
+    "media.open": "Åbn stort billede",
+    "media.download": "Download",
+    "media.result": "Billede fra Codex",
+    "media.uploading": "Uploader…",
+    "media.uploadFailed": "Upload mislykkedes — fjern og prøv igen",
+    "media.remove": "Fjern {name}",
+    "media.invalid": "Vælg et gyldigt PNG-, JPEG-, WebP- eller GIF-billede (maks. 40 megapixel).",
+    "media.size": "Hvert billede må højst fylde 8 MB.",
+    "media.count": "Vedhæft højst fire billeder pr. besked.",
+    "media.unavailable": "Billedet er ikke tilgængeligt. Genindlæs sessionen, eller vedhæft det igen.",
+    "media.storage": "Billedlageret er utilgængeligt eller fyldt (256 MB).",
+    "media.external": "Åbn eksternt billede",
+
     "composer.options": "Vis eller skjul model, effort og Goal",
     "composer.nextMessage": "Næste besked…",
     "goals.objective": "Opgave og kriterier for færdiggørelse",
@@ -365,6 +380,21 @@ export const messages = {
     'error.noPending': 'Anmodningen afventer ikke længere svar. Den kan være besvaret i en anden klient.',
   },
   en: {
+    "media.attach": "Attach images",
+    "media.image": "Image",
+    "media.open": "Open full image",
+    "media.download": "Download",
+    "media.result": "Image from Codex",
+    "media.uploading": "Uploading…",
+    "media.uploadFailed": "Upload failed — remove and try again",
+    "media.remove": "Remove {name}",
+    "media.invalid": "Choose a valid PNG, JPEG, WebP or GIF image (up to 40 megapixels).",
+    "media.size": "Each image must be 8 MB or smaller.",
+    "media.count": "Attach up to four images per message.",
+    "media.unavailable": "Image unavailable. Reload the session or attach it again.",
+    "media.storage": "Image storage is unavailable or full (256 MB).",
+    "media.external": "Open external image",
+
     "composer.options": "Show or hide model, effort and Goal",
     "composer.nextMessage": "Next message…",
     "goals.objective": "Objective and completion criteria",

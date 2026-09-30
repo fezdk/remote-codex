@@ -66,7 +66,7 @@ export function createSessionTools(codex) {
     return { model: current.model, reasoningEffort: current.reasoningEffort };
   }
   async function input(id, value) {
-    const parts = [{ type: 'text', text: value.text, text_elements: [] }];
+    const parts = value.text.trim() ? [{ type: 'text', text: value.text, text_elements: [] }] : [];
     if (value.skills === undefined || Array.isArray(value.skills) && !value.skills.length) return parts;
     if (!Array.isArray(value.skills) || value.skills.length > 20 || value.skills.some(name => typeof name !== 'string' || name.length > 200)) throw invalid('tools.invalidSkills');
     const selected = new Set(value.skills);

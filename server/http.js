@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createMedia, MAX_IMAGE_BYTES } from './media.js';
 import { createGoals } from './goals.js';
 import { messages } from '../public/locales.js';
 import { codexChanges, gitChanges, gitFileDiff } from './changes.js';
@@ -11,17 +12,17 @@ import { networkInterfaces } from 'node:os';
 
 const cookieName = 'remote_codex_session';
 const mime = { '/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8', '/state.js': 'text/javascript; charset=utf-8', '/style.css': 'text/css; charset=utf-8', '/icon.svg': 'image/svg+xml' };
-for (const name of ['preferences.js', 'i18n.js', 'locales.js', 'changes.js', 'queue.js', 'projects.js', 'input.js', 'session-tools.js', 'models.js', 'goals.js']) mime[`/${name}`] = 'text/javascript; charset=utf-8';
+for (const name of ['preferences.js', 'i18n.js', 'locales.js', 'changes.js', 'queue.js', 'projects.js', 'input.js', 'session-tools.js', 'models.js', 'goals.js', 'media.js']) mime[`/${name}`] = 'text/javascript; charset=utf-8';
 const idOK = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(value);
 const fail = (errorKey, status = 400) => Object.assign(new Error(messages.en[errorKey] || errorKey), { status, errorKey });
 const equal = (a, b) => timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
 
-async function body(req) {
+async function body(req, maximum = 1024 * 1024) {
   let length = 0;
   const chunks = [];
   for await (const chunk of req) {
     length += chunk.length;
-    if (length > 1024 * 1024) throw fail('error.tooLarge', 413);
+    if (length > maximum) throw fail('error.tooLarge', 413);
     chunks.push(chunk);
   }
   try {
@@ -53,8 +54,9 @@ export function approvalResult(request, input) {
   throw fail('error.unsupportedRequest', 422);
 }
 
-export function createWebServer({ codex, token, publicDir, origin, defaultCwd = process.cwd() }) {
+export function createWebServer({ codex, token, publicDir, origin, defaultCwd = process.cwd(), mediaDir = resolve(publicDir, '../.remote-codex/uploads') }) {
   const localProjects = !codex.options?.url || ['localhost', '127.0.0.1', '[::1]'].includes(new URL(codex.options.url).hostname);
+  const media = createMedia({ directory: mediaDir, localFiles: localProjects });
   const sessions = new Map();
   const streams = new Map();
   const attempts = new Map();
@@ -71,7 +73,7 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
       else sendEvent(res, type, data);
     }
   };
-  const onEvent = data => { sessionTools.event(data); broadcast('codex', data); };
+  const onEvent = data => { sessionTools.event(data); broadcast('codex', media.event(data)); };
   const onStatus = data => { sessionTools.connection(data); broadcast('status', data); };
   codex.on('event', onEvent);
   codex.on('status', onStatus);
@@ -174,6 +176,20 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
         codex.subscriptions.add(result.thread.id);
         json(201, result); return;
       }
+      const imageRoute = path.match(/^\/api\/threads\/([a-zA-Z0-9_-]{1,160})\/images(?:\/([a-f0-9]{64}))?$/);
+      if (imageRoute) {
+        const [, threadId, imageId] = imageRoute;
+        if (!imageId && req.method === 'POST') {
+          if (!codex.subscriptions.has(threadId)) throw fail('error.openSession', 409);
+          json(201, await media.upload(threadId, await body(req, Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 4096))); return;
+        }
+        if (imageId && req.method === 'GET') {
+          const { bytes, mime: imageMime } = await media.get(threadId, imageId);
+          res.setHeader('Content-Type', imageMime);
+          res.setHeader('Content-Disposition', `${url.searchParams.has('download') ? 'attachment' : 'inline'}; filename="image.${imageMime.split('/')[1]}"`);
+          res.end(bytes); return;
+        }
+      }
       const match = path.match(/^\/api\/threads\/([^/]+)\/(open|turns|message|interrupt|changes|git|git-diff|queue|skills|status|command|settings|goal)$/);
       if (match) {
         const [, threadId, action] = match;
@@ -210,26 +226,30 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
             if (seen.size >= 10 || seen.has(cursor)) throw fail('error.pagination', 502);
             seen.add(cursor);
             const page = await codex.rpc('thread/queue/list', { threadId, limit: 100, ...(cursor ? { cursor } : {}) });
-            data.push(...page.data); cursor = page.nextCursor;
+            data.push(...page.data.map(item => media.queued(threadId, item))); cursor = page.nextCursor;
           } while (cursor && data.length < 1000);
           json(200, { data, nextCursor: cursor || null }); return;
         }
         if (action === 'queue' && req.method === 'POST') {
           const input = await body(req);
-          if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 100000) throw fail('error.message');
+          if (typeof input.text !== 'string' || input.text.length > 100000 || !input.text.trim() && !input.images?.length) throw fail('error.message');
           if (!codex.subscriptions.has(threadId)) throw fail('error.openSession', 409);
           if (!idOK(input.clientId)) throw fail('error.message');
-          json(200, await codex.rpc('thread/queue/add', { threadId, clientUserMessageId: input.clientId, input: await sessionTools.input(threadId, input) })); return;
+          const images = await media.input(threadId, input.images);
+          const result = await codex.rpc('thread/queue/add', { threadId, clientUserMessageId: input.clientId, input: [...await sessionTools.input(threadId, input), ...images] });
+          json(200, { ...result, queuedSubmission: media.queued(threadId, result.queuedSubmission) }); return;
         }
         if (action === 'open' && req.method === 'POST') { json(200, await codex.subscribe(threadId)); return; }
         if (action === 'turns' && req.method === 'GET') {
-          json(200, await codex.rpc('thread/turns/list', { threadId, limit: 20, itemsView: 'full', sortDirection: 'desc', ...(url.searchParams.get('cursor') ? { cursor: url.searchParams.get('cursor') } : {}) })); return;
+          const result = await codex.rpc('thread/turns/list', { threadId, limit: 20, itemsView: 'full', sortDirection: 'desc', ...(url.searchParams.get('cursor') ? { cursor: url.searchParams.get('cursor') } : {}) });
+          json(200, { ...result, data: result.data.map(turn => media.turn(threadId, turn)) }); return;
         }
         if (action === 'message' && req.method === 'POST') {
           const input = await body(req);
-          if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 100000) throw fail('error.message');
+          if (typeof input.text !== 'string' || input.text.length > 100000 || !input.text.trim() && !input.images?.length) throw fail('error.message');
           if (!codex.subscriptions.has(threadId)) throw fail('error.openSession', 409);
-          const params = { threadId, input: await sessionTools.input(threadId, input) };
+          const images = await media.input(threadId, input.images);
+          const params = { threadId, input: [...await sessionTools.input(threadId, input), ...images] };
           if (input.clientId != null) {
             if (!idOK(input.clientId)) throw fail('error.message');
             params.clientUserMessageId = input.clientId;
@@ -238,7 +258,8 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
             if (!idOK(input.turnId)) throw fail('error.turnId');
             params.expectedTurnId = input.turnId;
           }
-          json(200, await codex.rpc(input.turnId ? 'turn/steer' : 'turn/start', params)); return;
+          const result = await codex.rpc(input.turnId ? 'turn/steer' : 'turn/start', params);
+          json(200, result.turn ? { ...result, turn: media.turn(threadId, result.turn) } : result); return;
         }
         if (action === 'interrupt' && req.method === 'POST') {
           const input = await body(req);
@@ -251,7 +272,8 @@ export function createWebServer({ codex, token, publicDir, origin, defaultCwd = 
         const [, threadId, queuedSubmissionId, action] = queued;
         if (!idOK(threadId) || !idOK(queuedSubmissionId)) throw fail('error.sessionId');
         if (!codex.subscriptions.has(threadId)) throw fail('error.openSession', 409);
-        json(200, await codex.rpc(`thread/queue/${action}`, { threadId, queuedSubmissionId })); return;
+        const result = await codex.rpc(`thread/queue/${action}`, { threadId, queuedSubmissionId });
+        json(200, result.turn ? { ...result, turn: media.turn(threadId, result.turn) } : result); return;
       }
       if (path === '/api/respond' && req.method === 'POST') {
         const input = await body(req);

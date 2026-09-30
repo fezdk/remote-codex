@@ -138,6 +138,7 @@ This service runs only the web server. The Codex daemon must have its own startu
 - Searchable, paginated session list with project paths and activity status.
 - Existing active and saved sessions through `thread/resume`, without configuration overrides.
 - Conversation history, streamed responses, code blocks, Markdown tables, command output, file changes, and agent activity. Tables support column alignment and inline formatting, with horizontal scrolling on narrow screens.
+- Image attachments through the file picker, drag-and-drop or clipboard paste, plus generated images, full-size viewing and downloads.
 - Task start/end timestamps, live elapsed time, and completed task duration, with clearly labelled browser observation times for live messages.
 - New sessions with project directory suggestions, path validation, and optional directory creation.
 - Persistent Codex message queue with editing, cancellation, and conversion to a steering instruction.
@@ -156,6 +157,22 @@ This service runs only the web server. The Codex daemon must have its own startu
 The session list marks active sessions with a green edge and a **Working** badge, and sessions awaiting approval or input with an amber **Needs input** badge. Activity is based on Codex runtime state and pending requests, including sessions other than the open chat. The open chat also uses its current turn state. Live status events update the badges; the existing 30-second session refresh picks up other server-reported changes. A disconnected browser shows previously active sessions as **Unknown**, without animation. Both themes and languages are supported, and the activity pulse respects reduced-motion preferences.
 
 On phones, the message field starts at one line, grows with your draft, and scrolls internally for longer text. Model, effort, and Goal controls sit behind the **Model · Goal** toggle; send, steer, and stop remain directly accessible. Compact headers and spacing leave more room for chat. The layout follows the browser's visible viewport as the on-screen keyboard opens, and keeps the newest message in view when you were already at the bottom. Warnings, queued messages, and approval requests remain accessible.
+
+## Images
+
+Implementation and validation details are recorded in the [image support review](docs/image-support.md).
+
+Use the **＋** button beside the message field, drop images on the conversation, or paste a screenshot into the message field. Preview or remove attachments before sending. Image-only messages are supported, as are images in queued messages, queue editing, ArrowUp recall and Steer. Image drafts stay with their session when switching chats; as with text drafts, a full page reload or logout clears them.
+
+Supported formats are PNG, JPEG, WebP and GIF: up to **4 images per message**, **8 MiB per image**, **40 megapixels**, and **16,384 pixels per side**. Other formats, including SVG, are rejected. Invalid or failed uploads remain visible for removal and retry; they block sending until resolved.
+
+Images in user messages, native `imageGeneration`/`imageView` items, and structured function/MCP/dynamic-tool results appear in the conversation. Click a thumbnail for a larger view and download. Tool details remain available below generated previews. This does not enable a new image-generation tool or model: generation uses whatever the existing Codex session already supports.
+
+Uploads are stored in `.remote-codex/uploads/` with directory mode `0700` and file mode `0600`, excluded from Git. The upload store has a **256 MiB total quota** and performs no automatic deletion. Removing a draft thumbnail or cancelling a queued message does not delete the stored upload. Sent images are passed to Codex as inline image input, so their availability in persisted history does not depend on the original upload file. Operators can reclaim draft-upload storage manually when it is no longer needed; unsent drafts referring to removed files must be reattached.
+
+All upload, preview and download endpoints require the existing login. The browser submits session-scoped image IDs, never arbitrary local paths or image URLs. Image data is validated against raster headers and dimensions; files are bounded, and final-component symlinks and nonregular files are rejected. The bridge registers local image paths only from typed Codex history/events. It never fetches external image URLs: those appear as explicit external links. File-ID-only images and local paths on a remote Codex host are shown as unavailable. An image saved by a shell command without a corresponding image item or structured image result is not discovered automatically.
+
+The bridge bounds its in-memory image registry to 2,000 references and 64 MiB of encoded data. Older references may be evicted; reopening the relevant history restores them from Codex. Upload references in unsent drafts do not survive a webserver restart. The protocol was checked against locally generated Codex 0.159.2 schemas; fixtures cover the supported payload shapes, without enabling generation or sending test messages in a real session.
 
 ## Goal controls
 
@@ -432,7 +449,7 @@ Integration tests use temporary local HTTP/WebSocket servers and Git repositorie
 
 Tests require permission to open local sockets and run browser processes. Playwright may require additional operating system packages to launch Chromium. Reports and traces are written to ignored directories.
 
-To regenerate the README screenshots after installing Chromium, run `npm run screenshots`. The script serves the actual frontend on an ephemeral loopback port with entirely synthetic API responses, blocks external browser requests, and writes the three images to `docs/screenshots/`. It does not connect to a Codex daemon or read credentials, real sessions, or project files. Review the generated images before committing them; this directory is intentionally tracked, unlike browser test artifacts.
+To regenerate the README screenshots after installing Chromium, run `npm run screenshots`. The script serves the actual frontend on an ephemeral loopback port with entirely synthetic API responses, blocks external browser requests, and writes the four images to `docs/screenshots/`. It does not connect to a Codex daemon or read credentials, real sessions, or project files. Review the generated images before committing them; this directory is intentionally tracked, unlike browser test artifacts.
 
 Use `npm run dev` to restart the web server when source files change. Browser assets are served directly from `public/`; reload the page after edits. Server restarts require a new browser login.
 

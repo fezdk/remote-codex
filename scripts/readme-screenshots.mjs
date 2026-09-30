@@ -60,7 +60,7 @@ const turns = [{ id: 'demo001', status: 'inProgress', startedAt: now / 1000 - 12
 const queue = [{ id: 'demo-queued', input: [{ type: 'text', text: 'Then add an empty state for projects with no activity.' }] }];
 const staticFiles = new Map([
   ['/', ['index.html', 'text/html']],
-  ...['app.js', 'changes.js', 'state.js', 'queue.js', 'projects.js', 'preferences.js', 'i18n.js', 'locales.js', 'input.js', 'session-tools.js', 'models.js', 'goals.js'].map(name => [`/${name}`, [name, 'text/javascript']]),
+  ...['app.js', 'changes.js', 'state.js', 'queue.js', 'projects.js', 'preferences.js', 'i18n.js', 'locales.js', 'input.js', 'session-tools.js', 'models.js', 'goals.js', 'media.js'].map(name => [`/${name}`, [name, 'text/javascript']]),
   ['/style.css', ['style.css', 'text/css']], ['/icon.svg', ['icon.svg', 'image/svg+xml']],
 ]);
 const problems = [];

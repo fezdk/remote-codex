@@ -1,3 +1,4 @@
+import { initMedia, inputImages } from './media.js';
 import { initProjects } from './projects.js';
 import { initChanges } from './changes.js';
 import { initQueue } from './queue.js';
@@ -59,7 +60,7 @@ function showLogin() {
   clearTimeout(searchTimer); cancelAnimationFrame(renderFrame); renderFrame = null;
   defaultCwd = ''; nextCursor = null; turnsCursor = null;
   Object.assign(state, createState()); drafts.clear(); requestCards.clear(); draftId = null; bufferedEvents = []; requestSignature = '';
-  queue.reset(); changes.selectThread(null); projects.reset(); sessionTools.reset(); models.reset(); goals.reset();
+  media.reset(); queue.reset(); changes.selectThread(null); projects.reset(); sessionTools.reset(); models.reset(); goals.reset();
   $('message').value = ''; $('messages').replaceChildren(); $('requests').replaceChildren(); $('session-list').replaceChildren();
   $('notice').hidden = true; $('notice-text').textContent = ''; $('session-view').hidden = true; $('welcome').hidden = false;
   $('search').value = ''; setSidebar(false);
@@ -388,11 +389,12 @@ function renderItem(item, turn) {
     if (timing) label.append(timeLabel(timing.at, timing.source));
     else { const unknown = el('span', 'message-time unknown', '—'); unknown.title = t('timing.unknownMessage'); unknown.setAttribute('aria-label', unknown.title); label.append(unknown); }
     wrapper.append(label);
-    const text = user ? (item.content || []).filter(c => c.type !== 'skill').map(c => c.text || (c.type === 'image' || c.type === 'localImage' ? t('session.image') : `[${c.type}]`)).join('\n') : item.text || '';
+    const text = user ? (item.content || []).filter(c => c.type !== 'skill' && !c.remoteImage).map(c => c.text || (c.type === 'image' || c.type === 'localImage' ? t('session.image') : `[${c.type}]`)).join('\n') : item.text || '';
     const questionText = (item.questions || []).map(q => q.title).join('\n');
     // Async questions may repeat their titles verbatim in the agent's text.
     // Keep the question cards once, preserving any separate surrounding prose.
-    if (user || !questionText || text.trim() !== questionText.trim()) wrapper.append(user ? el('div','message-body',displayText(text)) : markdown(text));
+    if (user ? Boolean(text) : !questionText || text.trim() !== questionText.trim()) wrapper.append(user ? el('div','message-body',displayText(text)) : markdown(text));
+    if (user && inputImages(item.content).length) wrapper.append(media.gallery(inputImages(item.content), false, `message:${item.id}`));
     const skills = user && (item.content || []).filter(c => c.type === 'skill').map(c => c.name);
     if (skills?.length) wrapper.append(el('div', 'delivery-status', t('tools.selectedSkills', { names: skills.join(', ') })));
     for (const q of item.questions || []) {
@@ -401,6 +403,12 @@ function renderItem(item, turn) {
       for (const option of q.options || []) { const b = el('button','',option); b.onclick = () => queue.restoreDraft(option); actions.append(b); }
       card.append(actions); wrapper.append(card);
     }
+    return wrapper;
+  }
+  if (item.remoteImages?.length) {
+    const wrapper = el('article','message agent image-message'); wrapper.dataset.itemId = item.id;
+    wrapper.append(el('div','message-label', t(item.type === 'imageView' ? 'tool.image' : 'media.result')), media.gallery(item.remoteImages, false, `message:${item.id}`));
+    const details = el('details','tool-item'); details.append(el('summary','',t('tool.output')), el('pre','',displayText(JSON.stringify(item, null, 2)))); wrapper.append(details);
     return wrapper;
   }
   const labels = { imageView:t('tool.image'), imageGeneration:t('tool.imageGeneration'), sleep:t('tool.sleep'), hookPrompt:t('tool.hook'), enteredReviewMode:t('tool.enterReview'), exitedReviewMode:t('tool.exitReview'), reasoning:t('tool.reasoning'), plan:t('tool.plan'), commandExecution: item.command || t('tool.command'), fileChange:t('tool.files'), mcpToolCall: `${item.server} / ${item.tool}`, dynamicToolCall:item.tool, collabAgentToolCall:t('tool.agent', { name: item.tool }), contextCompaction:t('tool.compaction'), functionCallOutput: item.name || t('tool.output'), webSearch:t('tool.web'), subAgentActivity:t('tool.agent', { name: item.agentPath }) };
@@ -491,7 +499,7 @@ function renderControls() {
   $('input-warning').hidden = !unavailable;
   $('input-warning').textContent = t('session.noInput');
   $('send-mode').textContent = active ? t('session.steer') : t('session.defaults');
-  queue.render();
+  media.render(); queue.render();
   if (mobileComposer.matches && working) $('message').placeholder = t('composer.nextMessage');
   resizeComposer();
   sessionTools.render();
@@ -611,11 +619,12 @@ setInterval(() => {
   }
 }, 1000);
 setInterval(()=>{if(state.connected&&!document.hidden&&!state.loading)loadThreads().catch(()=>{});},30000);
+const media = initMedia({ api, getState: () => state, notice, renderApp: renderAll });
 const changes = initChanges({ api, getState: () => state });
 const sessionTools = initSessionTools({ openGoal: () => goals.open(), api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text) });
 const goals = initGoals({ api, getState: () => state });
 const models = initModels({ api, getState: () => state, renderApp: renderAll, notice, isQueueBusy: () => queue.isBusy() });
-const queue = initQueue({ api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text), skillsFor: sessionTools.skillsFor, handleCommand: sessionTools.submit, isSettingsBusy: models.busy, refreshHistory: scheduleHistoryRefresh });
+const queue = initQueue({ media, api, getState: () => state, notice, renderApp: renderAll, getDraft: id => drafts.get(id) || '', saveDraft: (id, text) => drafts.set(id, text), skillsFor: sessionTools.skillsFor, handleCommand: sessionTools.submit, isSettingsBusy: models.busy, refreshHistory: scheduleHistoryRefresh });
 const projects = initProjects({ api, getDefaultCwd: () => state.thread?.cwd || defaultCwd, onCreated: async result => { await loadThreads().catch(notice); await openThread(result.thread.id); } });
 initPreferences(() => { renderConnection(); renderAll(); changes.render(); projects.render(); });
 new ResizeObserver(resizeComposer).observe($('message'));

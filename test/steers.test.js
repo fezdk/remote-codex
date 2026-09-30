@@ -64,3 +64,13 @@ test('explicit client IDs distinguish identical steers and survive item ID chang
   tracker.observe('thread', 'active', { ...message('first-live'), clientId: 'first' });
   assert.equal(tracker.list('thread').length, 0);
 });
+
+
+test('image-only steers wait for actual content and reconcile by client ID', () => {
+  const tracker = createSteerTracker(), pending = { id:'image-client', turnId:'active', input:[{type:'image',remoteImage:{id:'upload'}}] };
+  tracker.track('thread', pending, []);
+  tracker.observe('thread','active',{id:'image-item',type:'userMessage',clientId:'image-client',content:[]});
+  assert.equal(tracker.list('thread').length,1);
+  tracker.observe('thread','active',{id:'image-item',type:'userMessage',clientId:'image-client',content:[{type:'image',remoteImage:{id:'persisted'}}]});
+  assert.equal(tracker.list('thread').length,0);
+});

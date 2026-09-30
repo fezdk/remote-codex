@@ -22,6 +22,7 @@ export function messageTiming(state, turn, item) {
   return at === undefined ? null : { at, source: 'received' };
 }
 
+export const userMessageHasContent = item => item?.type === 'userMessage' && item.content?.some(part => part.type === 'text' && part.text || ['image','localImage'].includes(part.type));
 export const userMessageClientId = item => item?.type === 'userMessage' && typeof item.clientId === 'string' && item.clientId ? item.clientId : null;
 
 // Turn notifications can contain only some items. Merge by ID without discarding
@@ -94,12 +95,12 @@ export function createSteerTracker() {
     else entries.delete(threadId);
   }
   function observe(threadId, turnId, item) {
-    if (item?.type !== 'userMessage' || !item.id || !entries.has(threadId)) return;
+    if (!userMessageHasContent(item) || !item.id || !entries.has(threadId)) return;
     const observed = seen.get(threadId), itemKey = key(turnId, item.id);
     const clientId = userMessageClientId(item), clientKey = clientId && JSON.stringify(['client', turnId, clientId]);
     if (clientKey && observed.has(clientKey)) return;
     if (observed.has(itemKey)) return;
-    const entry = entries.get(threadId).find(candidate => !existingItems.get(candidate).has(itemKey) && candidate.turnId === turnId && (!clientId || candidate.id === clientId) && text(candidate.input) === text(item.content));
+    const entry = entries.get(threadId).find(candidate => !existingItems.get(candidate).has(itemKey) && candidate.turnId === turnId && (clientId ? candidate.id === clientId : !(candidate.input || []).some(part => ['image','localImage'].includes(part.type))) && text(candidate.input) === text(item.content));
     // An item can be announced before its text is complete. Only consume a match.
     if (!entry) return;
     observed.add(itemKey);

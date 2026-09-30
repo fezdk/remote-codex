@@ -1,3 +1,4 @@
+import { imageData } from './image-fixture.js';
 import { EventEmitter } from 'node:events';
 
 export class FixtureCodex extends EventEmitter {
@@ -59,7 +60,10 @@ export class FixtureCodex extends EventEmitter {
       const turn={id:`turn-${this.turns.length}`,startedAt:Date.now()/1000,status:'inProgress',items:[]};
       this.turns.push(turn);this.event('turn/started',{threadId:params.threadId,turn:structuredClone(turn)});
       const user={id:`user-${turn.id}`,type:'userMessage',clientId:params.clientUserMessageId||null,content:params.input};turn.items.push(user);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item:user});
-      if(text==='approval'){
+      if(text==='image fixture'){
+        const item={id:`image-${turn.id}`,type:'imageGeneration',status:'completed',result:imageData,revisedPrompt:'Synthetic test image'}; turn.items.push(item); this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item});
+        const output={id:`image-tool-${turn.id}`,type:'functionCallOutput',name:'synthetic_image_tool',output:[{type:'input_text',text:'Synthetic preview details'},{type:'input_image',image_url:imageData}]};turn.items.push(output);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item:output});this.complete(params.threadId,turn);
+      }else if(text==='approval'){
         this.event('item/commandExecution/requestApproval',{threadId:params.threadId,turnId:turn.id,itemId:'approval-command',command:'npm test',cwd:'/home/demo/project',reason:'Kør projektets tests',availableDecisions:['accept','decline','cancel']},42);
       }else if(text==='question'){
         this.event('item/tool/requestUserInput',{threadId:params.threadId,turnId:turn.id,itemId:'question',questions:[{id:'choice',header:'Farve',question:'Hvilken farve?',options:[{label:'Grøn',description:'Rolig farve'}]}]},43);
