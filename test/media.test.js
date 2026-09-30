@@ -13,6 +13,26 @@ async function setup(t) {
   t.after(()=>rm(root,{recursive:true,force:true}));
   return {root, media:createMedia({directory:resolve(root,'uploads')})};
 }
+test('assistant Markdown image links register scoped previews in history and completion events, excluding code and other links',async t=>{
+  const {root,media}=await setup(t), path=resolve(root,'preview (mobile).png');await writeFile(path,imageBytes);
+  const link=`[Se mobilpreview](<${path}>)`, image=`![Mobile](sandbox:${resolve(root,'image.png')})`;
+  await writeFile(resolve(root,'image.png'),imageBytes);
+  const text=['Before',link,image,'After','`'+link+'`','``'+link+'``','```markdown',link,'```','~~~markdown',link,'~~~','[Web](https://example.com/image.png)','[Secret](/etc/private.txt)','[Network](//example.com/image.png)','[Vector](/tmp/test.svg)'].join('\n');
+  const original={id:'agent',type:'agentMessage',text}, result=media.item('one',original);
+  assert.equal(result.text,text);assert.equal(original.remoteImageLinks,undefined);
+  assert.deepEqual(result.remoteImageLinks.map(link=>link.markdown),[link,image]);
+  for(const {image} of result.remoteImageLinks){assert.deepEqual((await media.get('one',image.id)).bytes,imageBytes);await assert.rejects(media.get('two',image.id),{status:404});}
+  assert.deepEqual(media.turn('one',{items:[original]}).items[0],result);
+  assert.deepEqual(media.event({method:'item/completed',params:{threadId:'one',item:original}}).params.item,result);
+  assert.equal(media.item('one',{type:'userMessage',content:[{type:'text',text:link}]}).remoteImageLinks,undefined);
+  assert.equal(media.item('one',{type:'agentMessage',text:'```\n'+link}).remoteImageLinks,undefined);
+  const remote=createMedia({directory:resolve(root,'remote'),localFiles:false});
+  assert.equal(remote.item('one',original).remoteImageLinks[0].image.unavailable,true);
+  const invalid=resolve(root,'private.png');await writeFile(invalid,'not an image');
+  const missing=media.item('one',{type:'agentMessage',text:`[Invalid](${invalid}) [Missing](/missing/preview.png)`}).remoteImageLinks;
+  for(const {image} of missing)await assert.rejects(media.get('one',image.id),{status:404});
+  assert.equal(media.item('one',{type:'agentMessage',text:(link+'\n').repeat(100)}).remoteImageLinks.length,16);
+});
 test('uploads validate bytes, retain private file modes, scope references to a thread and preserve exact data', async t => {
   const {root,media} = await setup(t);
   const uploaded = await media.upload('one',{name:'demo.png',data:imageData});

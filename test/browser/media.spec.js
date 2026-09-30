@@ -14,6 +14,24 @@ async function attach(page,name) {
 }
 const loaded = async locator => {await expect.poll(()=>locator.evaluate(img=>img.complete && img.naturalWidth)).toBeGreaterThan(0);};
 
+test('local Markdown image links become protected previews after streaming and history reload, with code kept literal',async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  await login(page);await page.locator('#message').fill('markdown image fixture');await page.locator('#send').click();
+  const message=page.locator('#messages .message.agent').filter({hasText:'Before preview.'});
+  await expect(message).toHaveCount(1);
+  const previews=message.locator('.image-gallery img');await expect(previews).toHaveCount(2);await loaded(previews.first());await loaded(previews.last());
+  await expect(previews.first()).toHaveAttribute('alt','Se mobilpreview');
+  await expect(message).toContainText('After preview.');await expect(message.locator('a')).toHaveAttribute('href','https://example.com/docs');
+  await expect(message.locator('code')).toHaveCount(3);await expect(message.locator('code').first()).toContainText('[Se mobilpreview](');
+  const url=await previews.first().getAttribute('src');expect(url).toMatch(/^\/api\/threads\/session-one\/images\/[a-f0-9]{64}$/);
+  await previews.first().click();await loaded(page.locator('#image-view'));await expect(page.locator('#image-view')).toHaveAttribute('alt','Se mobilpreview');
+  expect(await (await page.request.get(url+'?download=1')).body()).toEqual(imageBytes);
+  await page.keyboard.press('Escape');await page.reload();await expect(previews).toHaveCount(2);await loaded(previews.first());
+  await previews.first().scrollIntoViewIfNeeded();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:'test-results/markdown-image-mobile.png'});
+});
+
 test('file picker sends image-only input, renders history, opens a full image and downloads identical bytes',async({page})=>{
   await login(page);await attach(page);
   const sent=page.waitForRequest(req=>req.url().endsWith('/message')&&req.method()==='POST');

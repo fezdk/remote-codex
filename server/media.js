@@ -91,6 +91,21 @@ export function createMedia({ directory, localFiles = true }) {
   function item(threadId, original) {
     const result = { ...original };
     if (original.type === 'userMessage') { result.content = (original.content || []).map(input => part(threadId,input)); return result; }
+    if (original.type === 'agentMessage' && typeof original.text === 'string') {
+      // Only explicit Markdown links from Codex can register a local preview.
+      // Consume code first so examples are never treated as filesystem access.
+      const text = original.text.slice(0,200000).replace(/^ {0,3}(`{3,16}|~{3,16})(?![`~])[^\n]*\n([\s\S]*?)(?:^ {0,3}\1[ \t]*(?:\n|$)|(?![\s\S]))/gm, '\n');
+      const tokens = /(`{1,16})(?!`)[^\n]*?\1|!?\[([^\[\]\n]{0,512})\]\((?:<((?:sandbox:)?\/[^<>\n]{1,4096})>|((?:sandbox:)?\/[^\s()]{1,4096}))\)/g;
+      const links = [];
+      for (const match of text.matchAll(tokens)) {
+        if (match[2] === undefined) continue;
+        const path = (match[3] || match[4]).replace(/^sandbox:/, '');
+        if (path.startsWith('//') || /[\x00-\x1f\x7f]/.test(path) || !/\.(?:png|jpe?g|webp|gif)$/i.test(path)) continue;
+        links.push({ markdown: match[0], image: localFiles ? remember(threadId,{path},match[2] || 'image') : {unavailable:true,name:match[2] || 'image'} });
+        if (links.length === 16) break;
+      }
+      if (links.length) result.remoteImageLinks = links;
+    }
     const images = []; let visited = 0;
     function scan(value, depth = 0) {
       if (++visited > 1000 || depth > 10 || images.length >= 16) return '[truncated]';

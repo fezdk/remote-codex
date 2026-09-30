@@ -33,3 +33,13 @@ Tests cover PNG, JPEG, GIF and WebP byte preservation, image-only submission, qu
 | --- | --- |
 | `test-results/image-attachments-mobile.png` | `a559a0ebc5496d84ccd9a8351e16c1416b03f2fa8bd6f53c0bda63b1745e60f5` |
 | `test-results/image-results-desktop.png` | `ea7951d33c305963125078ebaf61b248932442389ca747a7752e551263adc4b6` |
+
+## Follow-up: local Markdown previews
+
+Assistant replies can now show previews for explicit Markdown links to absolute PNG, JPEG, WebP and GIF paths, including image syntax, angle-bracket paths containing spaces or parentheses, and `sandbox:`-prefixed absolute paths. The existing protected route validates the file on access. User text, ordinary file links, external links and fenced/inline code do not register local previews. Remote-host local paths remain unavailable. Files are not searched for automatically.
+
+The bridge decorates completed assistant items and history with scoped references while preserving the original text. The renderer uses those references at the matching links, retaining surrounding prose, code and web links. Previews support the existing full-size modal and downloads. Work is bounded to the displayed text limit and 16 previews per message; unavailable or invalid files show the existing unavailable-image state.
+
+Validation: all 67 Node tests and all 55 Chromium tests passed, along with 10 focused Firefox tests covering image delivery and Markdown tables. The new regression exercises a streamed reply, history reload, regular and image-style local links, literal code examples, the image modal, exact download bytes and mobile layout. Server checks cover paths containing spaces/parentheses, sandbox paths, thread isolation, remote-host handling, invalid/missing files, message limits and unchanged native text. Maximum-length malformed Markdown inputs were also checked for bounded parsing time. Tests use synthetic images and conversations.
+
+The mobile preview was visually inspected against the synthetic fixture: `test-results/markdown-image-mobile.png` (SHA-256 `6cd19bc19bd90478582142284e86a251ad68c562724d60a078c4a9bba5060bc8`).

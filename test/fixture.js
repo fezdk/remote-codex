@@ -1,4 +1,5 @@
 import { imageData } from './image-fixture.js';
+import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 
 export class FixtureCodex extends EventEmitter {
@@ -60,7 +61,13 @@ export class FixtureCodex extends EventEmitter {
       const turn={id:`turn-${this.turns.length}`,startedAt:Date.now()/1000,status:'inProgress',items:[]};
       this.turns.push(turn);this.event('turn/started',{threadId:params.threadId,turn:structuredClone(turn)});
       const user={id:`user-${turn.id}`,type:'userMessage',clientId:params.clientUserMessageId||null,content:params.input};turn.items.push(user);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item:user});
-      if(text==='image fixture'){
+      if(text==='markdown image fixture'){
+        const path=fileURLToPath(new URL('./fixtures/image-demo.png',import.meta.url));
+        const link=`[Se mobilpreview](${path})`;
+        const item={id:`markdown-image-${turn.id}`,type:'agentMessage',text:''};turn.items.push(item);this.event('item/started',{threadId:params.threadId,turnId:turn.id,item:structuredClone(item)});
+        setTimeout(()=>{item.text=`Before preview. ${link}\n\n![Second preview](<${path}>)\n\nAfter preview. [Docs](https://example.com/docs)\n\n\`${link}\`\n\n\`\`\`markdown\n${link}\n\`\`\`\n\n~~~markdown\n${link}\n~~~`;this.event('item/agentMessage/delta',{threadId:params.threadId,turnId:turn.id,itemId:item.id,delta:item.text});},40);
+        setTimeout(()=>{this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item:structuredClone(item)});this.complete(params.threadId,turn);},200);
+      }else if(text==='image fixture'){
         const item={id:`image-${turn.id}`,type:'imageGeneration',status:'completed',result:imageData,revisedPrompt:'Synthetic test image'}; turn.items.push(item); this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item});
         const output={id:`image-tool-${turn.id}`,type:'functionCallOutput',name:'synthetic_image_tool',output:[{type:'input_text',text:'Synthetic preview details'},{type:'input_image',image_url:imageData}]};turn.items.push(output);this.event('item/completed',{threadId:params.threadId,turnId:turn.id,item:output});this.complete(params.threadId,turn);
       }else if(text==='approval'){

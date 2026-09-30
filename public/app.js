@@ -266,13 +266,18 @@ function renderHeader() {
 }
 
 // Build text and a small Markdown subset with DOM nodes. No model output is inserted as HTML.
-function inline(node, text) {
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\[\]\n]+\]\(https?:\/\/[^\s()]+\))/g;
+function inline(node, text, context) {
+  const localLinks = [...(context?.links.keys() || [])].map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const pattern = new RegExp('(`{1,16})(?!`)[^\\n]*?\\1|\\*\\*[^*\\n]+\\*\\*|\\[[^\\[\\]\\n]+\\]\\(https?:\\/\\/[^\\s()]+\\)' + (localLinks.length ? '|' + localLinks.join('|') : ''), 'g');
   let start = 0;
   for (const match of text.matchAll(pattern)) {
     node.append(document.createTextNode(text.slice(start,match.index)));
     const value = match[0];
-    if (value.startsWith('`')) node.append(el('code','',value.slice(1,-1)));
+    if (context?.links.has(value)) {
+      if (context.imageIndex < 16) node.append(media.gallery([context.links.get(value)], false, `${context.key}:link:${context.imageIndex++}`));
+      else node.append(document.createTextNode(value));
+    }
+    else if (value.startsWith('`')) node.append(el('code','',value.slice(match[1].length,-match[1].length)));
     else if (value.startsWith('**')) node.append(el('strong','',value.slice(2,-2)));
     else {
       const parts = value.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
@@ -305,7 +310,7 @@ function tableRow(line) {
 }
 function markdownTables(node, text, budget) {
   const lines = text.split('\n'), pending = [];
-  const flush = () => { if (pending.length) { inline(node, pending.join('')); pending.length = 0; } };
+  const flush = () => { if (pending.length) { inline(node, pending.join(''), budget); pending.length = 0; } };
   for (let i = 0; i < lines.length;) {
     const header = tableRow(lines[i]), separator = i + 1 < lines.length ? tableRow(lines[i + 1]) : null;
     const count = header.cells.length;
@@ -321,7 +326,7 @@ function markdownTables(node, text, budget) {
       for (let col = 0; col < count; col++) {
         const cell = el(heading ? 'th' : 'td', `align-${alignments[col]}`);
         if (heading) cell.scope = 'col';
-        inline(cell, values[col] || ''); tr.append(cell);
+        inline(cell, values[col] || '', budget); tr.append(cell);
       }
       budget.cells -= count; return tr;
     };
@@ -335,11 +340,18 @@ function markdownTables(node, text, budget) {
   }
   flush();
 }
-function markdown(text) {
+function markdown(text, imageLinks = [], key = '') {
   const node = el('div','message-body');
-  const budget = { cells: 5000 };
-  const parts = displayText(text).split(/```[^\n`]*\n([\s\S]*?)(?:```|$)/g);
-  parts.forEach((part,index) => { if (index % 2) { const pre = el('pre'); pre.append(el('code','',part)); node.append(pre); } else markdownTables(node,part,budget); });
+  const budget = { cells: 5000, links: new Map(imageLinks.map(link => [link.markdown,link.image])), key, imageIndex: 0 };
+  const value = displayText(text);
+  const fences = /^ {0,3}(`{3,16}|~{3,16})(?![`~])[^\n]*\n([\s\S]*?)(?:^ {0,3}\1[ \t]*(?:\n|$)|(?![\s\S]))/gm;
+  let start = 0;
+  for (const match of value.matchAll(fences)) {
+    markdownTables(node,value.slice(start,match.index),budget);
+    const pre = el('pre'); pre.append(el('code','',match[2])); node.append(pre);
+    start = match.index + match[0].length;
+  }
+  markdownTables(node,value.slice(start),budget);
   return node;
 }
 function displayText(text) {
@@ -393,7 +405,7 @@ function renderItem(item, turn) {
     const questionText = (item.questions || []).map(q => q.title).join('\n');
     // Async questions may repeat their titles verbatim in the agent's text.
     // Keep the question cards once, preserving any separate surrounding prose.
-    if (user ? Boolean(text) : !questionText || text.trim() !== questionText.trim()) wrapper.append(user ? el('div','message-body',displayText(text)) : markdown(text));
+    if (user ? Boolean(text) : !questionText || text.trim() !== questionText.trim()) wrapper.append(user ? el('div','message-body',displayText(text)) : markdown(text, item.remoteImageLinks, `message:${item.id}`));
     if (user && inputImages(item.content).length) wrapper.append(media.gallery(inputImages(item.content), false, `message:${item.id}`));
     const skills = user && (item.content || []).filter(c => c.type === 'skill').map(c => c.name);
     if (skills?.length) wrapper.append(el('div', 'delivery-status', t('tools.selectedSkills', { names: skills.join(', ') })));
