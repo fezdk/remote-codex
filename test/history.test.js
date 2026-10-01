@@ -70,3 +70,64 @@ test('item identity preserves deliberate repeated text and collapses duplicates 
   const nullId = mergeTurns(merged, [{ id: 'turn', items: [{ ...first, clientId: null }] }]);
   assert.equal(nullId[0].items[0].clientId, 'one');
 });
+
+test('reconstructed history and live agent answers reconcile in either order and retain image metadata', () => {
+  const live = { ...agent, id: 'msg_native', text: 'Preview: [image](/synthetic/preview.png)', phase: 'commentary' };
+  const stored = { ...live, id: 'item-42', remoteImageLinks: [{ markdown: '[image](/synthetic/preview.png)', image: { id: 'synthetic-image' } }] };
+  for (const reverse of [false, true]) {
+    const s = state(), [first, second] = reverse ? [stored, live] : [live, stored];
+    applyEvent(s, { method: 'item/completed', params: { threadId: 'demo', turnId: 'turn', item: first } });
+    restoreHistory(s, [{ id: 'turn', status: 'inProgress', items: [second] }], [], 0);
+    assert.equal(s.turns[0].items.length, 1);
+    assert.deepEqual(s.turns[0].items[0].remoteImageLinks, stored.remoteImageLinks);
+    // A later partial start with either ID must not create a new bubble or erase text.
+    for (const id of [live.id, stored.id]) {
+      applyEvent(s, { method: 'item/started', params: { threadId: 'demo', turnId: 'turn', item: { id, type: 'agentMessage', text: '' } } });
+      assert.equal(s.turns[0].items.length, 1);
+      assert.equal(s.turns[0].items[0].text, live.text);
+    }
+    applyEvent(s, { method: 'item/agentMessage/delta', params: { threadId: 'demo', turnId: 'turn', itemId: second.id, delta: ' More.' } });
+    assert.equal(s.turns[0].items.length, 1);
+    assert.equal(s.turns[0].items[0].text, live.text + ' More.');
+    restoreHistory(s, [{ id: 'turn', status: 'inProgress', items: [{ ...stored, text: live.text + ' More.' }] }], [], 0);
+    assert.equal(s.turns[0].items.length, 1);
+  }
+});
+
+test('reconstructed answer matching is one-to-one and does not deduplicate intentional repetitions', () => {
+  const live = [1, 2].map(n => ({ ...agent, id: `msg_${n}` }));
+  const stored = [1, 2].map(n => ({ ...agent, id: `item-${n}` }));
+  for (const [first, second] of [[live, stored], [stored, live]]) {
+    let turns = mergeTurns([], [{ id: 'turn', items: first }]);
+    turns = mergeTurns(turns, [{ id: 'turn', items: second }]);
+    assert.equal(turns[0].items.length, 2);
+    turns = mergeTurns(turns, [{ id: 'turn', items: [...second, { ...agent, id: 'msg_new' }] }]);
+    assert.equal(turns[0].items.length, 3);
+  }
+  assert.equal(mergeTurns([], [{ id: 'turn', items: [...live, ...stored] }])[0].items.length, 4);
+  assert.equal(mergeTurns([{ id: 'one', items: live }], [{ id: 'two', items: stored }]).length, 2);
+  for (const text of ['', ' ', 'Updated the']) {
+    assert.equal(mergeTurns([{ id: 'turn', items: [agent] }], [{ id: 'turn', items: [{ ...agent, id: 'item-1', text }] }])[0].items.length, 2);
+  }
+  assert.equal(mergeTurns([{ id: 'turn', items: [{ ...agent, phase: 'commentary' }] }], [{ id: 'turn', items: [{ ...agent, id: 'item-1', phase: 'final_answer' }] }])[0].items.length, 2);
+});
+
+test('user aliases still reconcile when subsequent events omit the client ID', () => {
+  const s = state();
+  s.turns = mergeTurns([{ id: 'turn', items: [{ ...user('live'), clientId: 'client' }] }], [{ id: 'turn', items: [{ ...user('stored'), clientId: 'client' }] }]);
+  applyEvent(s, { method: 'item/completed', params: { threadId: 'demo', turnId: 'turn', item: user('stored') } });
+  assert.equal(s.turns[0].items.length, 1);
+  assert.equal(s.turns[0].items[0].clientId, 'client');
+});
+
+test('completion joins a partial live answer with its full reconstructed snapshot', () => {
+  const s = state();
+  s.turns = [{ id: 'turn', items: [{ ...agent, id: 'msg_stream', text: 'Updated' }] }];
+  restoreHistory(s, [{ id: 'turn', items: [{ ...agent, id: 'item-42' }] }], [], 0);
+  applyEvent(s, { method: 'item/completed', params: { threadId: 'demo', turnId: 'turn', item: { ...agent, id: 'msg_stream' } } });
+  assert.equal(s.turns[0].items.length, 1);
+  assert.equal(s.turns[0].items[0].text, agent.text);
+  // A separate native answer with the same text remains a separate message.
+  applyEvent(s, { method: 'item/completed', params: { threadId: 'demo', turnId: 'turn', item: { ...agent, id: 'msg_repeat' } } });
+  assert.equal(s.turns[0].items.length, 2);
+});

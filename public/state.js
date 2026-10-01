@@ -18,38 +18,75 @@ export function messageTiming(state, turn, item) {
   const timing = turnTiming(turn), items = turn.items || [];
   if (item.type === 'userMessage' && items.find(i => i.type === 'userMessage')?.id === item.id && timing.start !== null) return { at: timing.start, source: 'start' };
   if (item.type === 'agentMessage' && items.findLast(i => i.type === 'agentMessage')?.id === item.id && timing.end !== null) return { at: timing.end, source: 'end' };
-  const at = state.messageTimes.get(messageTimeKey(state.selectedId, turn.id, item.id));
+  const at = [...idsOf(item)].map(id => state.messageTimes.get(messageTimeKey(state.selectedId, turn.id, id))).find(value => value !== undefined);
   return at === undefined ? null : { at, source: 'received' };
 }
 
 export const userMessageHasContent = item => item?.type === 'userMessage' && item.content?.some(part => part.type === 'text' && part.text || ['image','localImage'].includes(part.type));
 export const userMessageClientId = item => item?.type === 'userMessage' && typeof item.clientId === 'string' && item.clientId ? item.clientId : null;
 
-// Turn notifications can contain only some items. Merge by ID without discarding
+// Loaded-thread history can reconstruct agent messages as item-N even though
+// notifications use native message IDs. Keep reconciled IDs on the object,
+// outside the protocol payload, so later notifications still find that item.
+const itemAliases = new WeakMap();
+const idsOf = item => itemAliases.get(item) || [item.id];
+function retainIds(value, ...sources) {
+  itemAliases.set(value, new Set([value.id, ...sources.filter(Boolean).flatMap(item => [...idsOf(item)])]));
+  return value;
+}
+const hasItemId = (item, id) => [...idsOf(item)].includes(id);
+const reconstructedId = id => /^item-\d+$/.test(id);
+function sameReconstructedAnswer(a, b) {
+  return a.type === 'agentMessage' && b.type === 'agentMessage'
+    && typeof a.text === 'string' && a.text.trim() && a.text === b.text
+    && (!a.phase || !b.phase || a.phase === b.phase)
+    && reconstructedId(a.id) !== reconstructedId(b.id)
+    && /^msg_/.test(reconstructedId(a.id) ? b.id : a.id)
+    && [...idsOf(a)].every(id => reconstructedId(id) !== reconstructedId(b.id));
+}
+
+// Turn notifications can contain only some items. Merge without discarding
 // streamed messages, and insert newly loaded history before its next known item.
 function mergeItems(existing = [], incoming = [], summary = false) {
-  // Live and persisted user items can have different item IDs. Only an explicit
-  // client ID establishes equivalence; identical text can be intentional.
-  const clients = new Map([...existing, ...incoming].filter(userMessageClientId).map(item => [item.id, item.clientId]));
-  const canonical = new Map();
-  function normalize(items) {
-    const unique = new Map();
+  // User items require explicit identity; identical text can be intentional.
+  const clients = new Map([...existing, ...incoming].filter(userMessageClientId).flatMap(item => [...idsOf(item)].map(id => [id, item.clientId])));
+  const canonical = new Map(), aliases = new Map();
+  function normalize(items, candidates = []) {
+    const unique = new Map(), matched = new Set();
     for (const item of items) {
-      const clientId = item.type === 'userMessage' ? clients.get(item.id) : null;
-      if (clientId && !canonical.has(clientId)) canonical.set(clientId, item.id);
-      const id = clientId ? canonical.get(clientId) : item.id;
-      unique.set(id, { ...unique.get(id), ...item, id, ...(clientId ? { clientId } : {}) });
+      const clientId = item.type === 'userMessage' ? [...idsOf(item)].map(id => clients.get(id)).find(Boolean) : null;
+      let id = clientId && canonical.get(clientId) || [...idsOf(item)].map(id => aliases.get(id)).find(Boolean);
+      // Match exact, nonempty answers one-to-one across the two ID formats.
+      // Never collapse two native messages or repeated text within a snapshot.
+      if (!id && item.type === 'agentMessage' && item.text?.trim()) id = candidates.find(candidate => !matched.has(candidate.id) && sameReconstructedAnswer(candidate, item))?.id;
+      id ||= item.id;
+      if (clientId) canonical.set(clientId, id);
+      for (const alias of idsOf(item)) aliases.set(alias, id);
+      matched.add(id);
+      unique.set(id, retainIds({ ...unique.get(id), ...item, id, ...(clientId ? { clientId } : {}) }, unique.get(id), item));
     }
     return [...unique.values()];
   }
-  existing = normalize(existing); incoming = normalize(incoming);
+  existing = normalize(existing); incoming = normalize(incoming, existing);
+  // History may have contained the full answer while its live copy was still
+  // streaming. Once that known live item completes, retire the matching copy.
+  const incomingIds = new Set(incoming.map(item => item.id));
+  incoming = incoming.map(item => {
+    if (item.type !== 'agentMessage') return item;
+    const previous = existing.find(old => old.id === item.id);
+    if (!previous || previous.text === item.text) return item;
+    const copy = existing.find(old => !incomingIds.has(old.id) && sameReconstructedAnswer(old, item));
+    if (!copy) return item;
+    existing = existing.filter(old => old !== copy);
+    return retainIds({ ...copy, ...item }, copy, item);
+  });
   const known = new Map(existing.map(item => [item.id, item]));
   const before = new Map(); let additions = [];
   for (const item of incoming) {
     if (!known.has(item.id)) { additions.push(item); continue; }
     before.set(item.id, [...before.get(item.id) || [], ...additions]); additions = [];
     const old = known.get(item.id);
-    known.set(item.id, summary ? { ...item, ...old } : { ...old, ...item });
+    known.set(item.id, retainIds(summary ? { ...item, ...old } : { ...old, ...item }, old, item));
   }
   return existing.flatMap(item => [...before.get(item.id) || [], known.get(item.id)]).concat(additions);
 }
@@ -136,7 +173,7 @@ export function restoreHistory(state, snapshot, events, responseSequence = 0) {
   }
   // Preserve a known live prefix without replaying overlapping deltas twice.
   for (const turn of state.turns) for (const item of turn.items || []) {
-    const current = live.find(candidate => candidate.id === turn.id)?.items?.find(candidate => candidate.id === item.id);
+    const current = live.find(candidate => candidate.id === turn.id)?.items?.find(candidate => hasItemId(item, candidate.id));
     for (const field of ['text', 'aggregatedOutput']) {
       if (typeof item[field] === 'string' && typeof current?.[field] === 'string' && current[field].startsWith(item[field])) item[field] = current[field];
     }
@@ -190,7 +227,7 @@ export function applyEvent(state, message) {
     const turn = state.turns.find(turn => turn.id === (p.turnId || p.turn?.id));
     if (message.method.endsWith('Delta') || message.method.endsWith('/delta')) return;
     if (message.method === 'turn/started' && turn) return;
-    if (message.method === 'item/started' && turn?.items?.some(item => item.id === p.item?.id)) return;
+    if (message.method === 'item/started' && turn?.items?.some(item => hasItemId(item, p.item?.id))) return;
   }
   if (message.method === 'turn/started' || message.method === 'turn/completed') {
     const old = state.turns.find(t => t.id === p.turn.id);
@@ -200,12 +237,12 @@ export function applyEvent(state, message) {
   if (p.turnId && (message.method.startsWith('item/') || message.method === 'error')) {
     let turn = state.turns.find(t => t.id === p.turnId);
     if (!turn) { turn = { id: p.turnId, status: 'inProgress', items: [], startedAt: null, observedStartedAt: Date.now()/1000 }; state.turns.push(turn); }
-    if (p.item) turn.items = mergeItems(turn.items, [p.item]);
+    if (p.item) turn.items = mergeItems(turn.items, [p.item], message.method === 'item/started');
     if (p.itemId && typeof p.delta === 'string') {
       const types = { 'item/agentMessage/delta': ['agentMessage','text'], 'item/commandExecution/outputDelta': ['commandExecution','aggregatedOutput'], 'item/plan/delta': ['plan','text'], 'item/reasoning/summaryTextDelta': ['reasoning','summary'] };
       const spec = types[message.method];
       if (spec) {
-        let item = turn.items.find(item => item.id === p.itemId);
+        let item = turn.items.find(item => hasItemId(item, p.itemId));
         if (!item) { item = { id: p.itemId, type: spec[0] }; turn.items.push(item); }
         if (spec[1] === 'summary') { item.summary ||= []; item.summary[p.summaryIndex || 0] = (item.summary[p.summaryIndex || 0] || '') + p.delta; }
         else item[spec[1]] = (item[spec[1]] || '') + p.delta;

@@ -55,3 +55,23 @@ A synthetic before/after state replay produced two user items with the old code 
 The original transient duplicate was not captured in a browser event trace. A read-only check of recent persisted turns did not show duplicate user text. These fixes address reproduced synchronization defects; they do not establish which event sequence occurred in the original report. Payloads lacking both a stable item ID and a client ID cannot safely be deduplicated merely by comparing their text.
 
 Validation: `npm run check`, all 60 Node tests, all 48 Chromium browser tests, and 12 focused Firefox browser tests passed. Browser tests used only synthetic session data and a separate fixture server. The wide layout was inspected at 2200 × 1200; the screenshot is a running web UI against fixtures, not a real conversation. The local artifact `test-results/delivery-wide.png` has SHA-256 `6832c13a52cef4f300496d5a78531c03610dfcd7c5ee18de9db294de739e8950`. It is ignored by Git. The Firefox run used the temporary configuration `delivery-firefox.config.js` with `browserName: "firefox"`, selecting the delivery, steer and command test files; the operator’s personal browser profile was not tested.
+
+## Agent-answer reconciliation — 2026-10-01
+
+The earlier client-ID fix addressed user submissions. Agent answers have no corresponding client ID. A read-only comparison in an affected loaded thread found exact answer-text matches between persisted native `msg_…` records and history items named `item-N`. The two most recent answers checked both had different IDs in those representations. A separate live observation confirmed native `msg_…` notification IDs, although that observation's own history retained its native ID. The mismatch therefore does not occur in every thread. The browser event sequence from the original duplicate report was not available.
+
+A synthetic replay reproduces the defect: merging a native answer and an identical reconstructed history answer produced two items before this change and one afterward. Reopening a thread clears the live state and can hide the defect by rendering only the history representation.
+
+The frontend now reconciles exact, nonempty agent answers one-to-one between `msg_…` and `item-N` IDs within the same turn, requiring compatible phases. It retains the associated IDs in memory so subsequent starts, completions, deltas, history reads and observed timestamps address the same item. Once a native ID has been associated with a reconstructed answer, another native ID cannot claim that answer merely by repeating its text. Separate native messages, repeated entries within a single snapshot, different turns, and explicit distinct user submission IDs remain separate. A late completion can also reconcile a partial live answer with a full history copy. Late start notifications preserve already received content.
+
+Image-link metadata is retained when the two representations merge. Browser regressions cover metadata arriving with history while the task remains active: one answer and one loaded protected image are displayed without reloading. Existing upload, generated-image, Markdown-image, queue and Steer regressions still pass. A reported image becoming visible after a hard refresh does not establish whether the old page lacked current JavaScript or image metadata; no browser trace of that earlier failure was captured.
+
+### Verification and limits
+
+- `npm run check` and all 74 Node tests passed.
+- The history, delivery, Steer and media browser suites passed: 20 tests in Chromium and the same 20 in Firefox, using isolated synthetic fixtures. Firefox used a temporary configuration selecting those suites and `browserName: "firefox"` with a separate output directory. Existing cached test browsers were used via `PLAYWRIGHT_BROWSERS_PATH`; no personal browser profile was accessed.
+- The running fixture UI was visually inspected with an active task, two distinct answers and one image. The ignored local artifact is `test-results/answer-reconciliation.png` (1440 × 1000, Firefox); SHA-256: `f9c2b27eddd516afc45458ff3b164bcad3769689cb0ab31892be701cb52963ca`. It contains synthetic content only.
+
+Cross-format matching is a narrowly scoped compatibility heuristic because the reconstructed payload does not expose the native ID. It is not a guarantee of upstream message identity and does not apply general text deduplication. Unknown formats, conflicting phases and unequal text are retained. A partial live copy can remain separate until its full text arrives. Shared stable IDs from the server would remove this ambiguity.
+
+This change requires reloading the browser code. It does not require restarting the webserver or Codex daemon, and it neither changes stored transcripts nor resubmits messages.
